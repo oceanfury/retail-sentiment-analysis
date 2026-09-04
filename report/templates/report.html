@@ -24,7 +24,19 @@
             padding: 30px;
             border-radius: 12px;
             margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
         }
+        .header-logo {
+            width: 80px;
+            height: 80px;
+            border-radius: 12px;
+            flex-shrink: 0;
+            object-fit: cover;
+            background: white;
+        }
+        .header-text { flex: 1; }
         .header h1 { font-size: 28px; margin-bottom: 8px; }
         .header .subtitle { opacity: 0.9; font-size: 14px; }
         .header .meta { margin-top: 12px; font-size: 13px; opacity: 0.8; }
@@ -129,6 +141,7 @@
             font-size: 12px;
             font-weight: 500;
         }
+        .stage-0 { background: #fafafa; color: #8c8c8c; }
         .stage-1 { background: #f6ffed; color: #52c41a; }
         .stage-2 { background: #e6f7ff; color: #1890ff; }
         .stage-3 { background: #fff1f0; color: #f5222d; }
@@ -151,6 +164,23 @@
         .warning-box h4 { color: #d48806; margin-bottom: 8px; }
         .warning-box ul { padding-left: 20px; color: #874d00; font-size: 14px; }
 
+        .provisional-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            background: #fff7e6;
+            color: #fa8c16;
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+        .heat-value-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
         .footer {
             text-align: center;
             color: #aaa;
@@ -167,11 +197,14 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>📊 {% if data_source == 'xueqiu' %}雪球{% elif data_source == 'guba' %}股吧{% else %}散户{% endif %}情绪日报</h1>
+            <img src="logo_hunshifan_v4.jpg" class="header-logo" alt="混市FAN">
+            <div class="header-text">
+            <h1>{% if data_source == 'xueqiu' %}混市FAN雪球情绪报告{% elif data_source == 'guba' %}混市FAN股吧情绪报告{% else %}混市FAN散户情绪报告{% endif %}</h1>
             <div class="subtitle">{% if data_source == 'xueqiu' %}基于雪球社区的散户情绪与炒作周期分析{% elif data_source == 'guba' %}基于东方财富股吧的散户情绪与炒作周期分析{% else %}基于社交媒体的散户情绪与炒作周期分析{% endif %}</div>
             <div class="meta">
                 报告日期：{{ date }} | 生成时间：{{ generated_at }} |
                 数据来源：{{ sources }} | 覆盖股票：{{ total_stocks }} 只 | 帖子总数：{{ total_posts }} 条
+            </div>
             </div>
         </div>
 
@@ -186,8 +219,21 @@
             </div>
             <div class="stat-card">
                 <div class="label">讨论热度</div>
-                <div class="value sentiment-mid">{{ "%.1f"|format(overview.overall_heat) }}</div>
-                <div class="sub">综合热度指数</div>
+                <div class="heat-value-wrap">
+                    <div class="value sentiment-mid">{{ "%.1f"|format(overview.overall_heat) }}</div>
+                    {% if overview.heat_is_provisional %}
+                        <span class="provisional-badge" title="数据滞后约6天，为最近一周均值临时值">临</span>
+                    {% endif %}
+                </div>
+                <div class="sub">
+                    {% if overview.heat_source == 'apppc_daily' %}
+                        东方财富APP UV指数
+                    {% elif overview.heat_source == 'week_avg' %}
+                        UV指数（一周均值·临时）
+                    {% else %}
+                        综合热度指数
+                    {% endif %}
+                </div>
             </div>
             <div class="stat-card">
                 <div class="label">看多股票占比</div>
@@ -280,6 +326,7 @@
                         <th>排名</th>
                         <th>股票</th>
                         <th>代码</th>
+                        <th>股价</th>
                         <th>涨跌幅</th>
                         <th>情绪指数</th>
                         <th>热度</th>
@@ -295,6 +342,7 @@
                         <td>{{ loop.index }}</td>
                         <td><strong>{{ stock.stock_name }}</strong></td>
                         <td>{{ stock.stock_code }}</td>
+                        <td>{% if stock.price %}{{ "%.2f"|format(stock.price) }}{% else %}—{% endif %}</td>
                         <td style="color: {% if stock.change_percent > 0 %}#f5222d{% elif stock.change_percent < 0 %}#52c41a{% else %}#888{% endif %};">
                             {{ "%.2f"|format(stock.change_percent) }}%
                         </td>

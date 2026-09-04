@@ -11,7 +11,7 @@ from typing import List, Dict
 from pathlib import Path
 import sys
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent.parent))
-from config.settings import RAW_DATA_DIR
+from config.settings import RAW_DATA_DIR, MARKET_HEAT_FILE
 
 
 def save_daily_data(data: Dict, date_str: str = None, source: str = None) -> str:
@@ -317,6 +317,73 @@ def load_watchlist_history(stock_code: str, days: int = 30,
     with open(WATCHLIST_HISTORY_FILE, "r", encoding="utf-8") as f:
         history = json.load(f)
     return history.get(key, [])[-days:]
+
+
+# ============== 市场热度（大盘UV指数）存储 ==============
+
+def save_market_heat(heat_data: Dict[str, Dict]) -> str:
+    """
+    保存市场热度数据到文件
+    新数据会合并进已有数据，临时值会被真实值覆盖
+
+    Args:
+        heat_data: {"YYYY-MM-DD": {"uv_index": float, "heat_score": float, "is_provisional": bool, "source": str}, ...}
+
+    Returns:
+        str: 文件路径
+    """
+    existing = {}
+    if MARKET_HEAT_FILE.exists():
+        with open(MARKET_HEAT_FILE, "r", encoding="utf-8") as f:
+            existing = json.load(f)
+
+    # 合并：新数据优先，但如果旧数据是真实值、新数据是临时值，则保留真实值
+    for date_str, entry in heat_data.items():
+        old_entry = existing.get(date_str)
+        if old_entry and old_entry.get("is_provisional") is False and entry.get("is_provisional") is True:
+            # 旧数据是真实值，新数据是临时值，保留真实值
+            continue
+        existing[date_str] = entry
+
+    # 只保留最近 180 天的数据
+    sorted_dates = sorted(existing.keys())
+    if len(sorted_dates) > 180:
+        for d in sorted_dates[:-180]:
+            del existing[d]
+
+    MARKET_HEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(MARKET_HEAT_FILE, "w", encoding="utf-8") as f:
+        json.dump(existing, f, ensure_ascii=False, indent=2)
+
+    print(f"  📈 市场热度数据已保存: {len(existing)} 天")
+    return str(MARKET_HEAT_FILE)
+
+
+def load_market_heat() -> Dict[str, Dict]:
+    """
+    加载市场热度数据
+
+    Returns:
+        dict: {"YYYY-MM-DD": {"uv_index": float, "heat_score": float, "is_provisional": bool, "source": str}, ...}
+    """
+    if not MARKET_HEAT_FILE.exists():
+        return {}
+    with open(MARKET_HEAT_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def get_market_heat_by_date(date_str: str) -> Dict:
+    """
+    获取指定日期的市场热度
+
+    Args:
+        date_str: "YYYY-MM-DD"
+
+    Returns:
+        dict: 热度数据，如果没有返回空dict
+    """
+    all_data = load_market_heat()
+    return all_data.get(date_str, {})
 
 
 if __name__ == "__main__":

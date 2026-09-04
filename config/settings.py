@@ -72,3 +72,31 @@ THEMES = {
     "机器人": ["机器人", "人形机器人", "工业机器人", "减速器", "伺服电机"],
     "5G/通信": ["5G", "通信", "运营商", "中兴", "华为", "基站"],
 }
+
+# ============== 雪球个股热度配置 ==============
+# 热度公式：互动量(70%) + 关注量(30%)，对数缩放
+XUEQIU_HEAT_INTERACTION_WEIGHT = 70.0   # 互动量权重
+XUEQIU_HEAT_FOLLOW_WEIGHT = 30.0        # 关注量权重
+XUEQIU_HEAT_INTERACTION_BASE = 2000.0   # 互动量满分基准（2000互动量=满分）
+XUEQIU_HEAT_FOLLOW_BASE = 500000.0      # 关注量满分基准（50万关注量=满分）
+
+# ============== 市场热度（大盘UV指数）配置 ==============
+# apppc.com 东方财富网 APP ID
+MARKET_HEAT_APP_ID = "3Eves1NRcX10yZ"
+# UV 指数归一化基准（万）：5000万=0分，10000万=100分。8月历史真实值范围5839万~8165万
+MARKET_HEAT_UV_LOW = 5000.0
+MARKET_HEAT_UV_HIGH = 9000.0
+# 数据滞后天数（apppc 数据约滞后 6 天）
+MARKET_HEAT_LAG_DAYS = 7
+# 市场热度数据文件
+MARKET_HEAT_FILE = RAW_DATA_DIR / "market_heat.json"
+
+# ============== Deepseek 大模型情绪分析配置 ==============
+# DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_API_KEY = "sk-943321f451b0466c952c6d399c55dc08"
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+DEEPSEEK_MODEL = "deepseek-chat"
+LLM_BATCH_SIZE = 20
+LLM_MAX_RETRIES = 3
+LLM_REQUEST_DELAY = 0.5
+LLM_CONCURRENCY = 3

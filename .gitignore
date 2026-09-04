@@ -40,3 +40,6 @@ logs/
 *.tmp
 *.bak
 *.temp
+
+# 测试文件
+_check*.py

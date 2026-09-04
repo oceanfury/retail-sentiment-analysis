@@ -8,13 +8,13 @@ from typing import Dict, List
 
 
 def _sentiment_level(val: float) -> str:
-    if val >= 80:
+    if val >= 70:
         return "极度乐观"
     elif val >= 55:
         return "偏多"
     elif val >= 45:
         return "中性"
-    elif val >= 20:
+    elif val >= 30:
         return "偏空"
     else:
         return "极度悲观"
@@ -60,11 +60,11 @@ def _match_pattern(sentiment, heat, divergence, sent_trend=0, heat_trend=0):
     heat_up = heat_trend > 0.05
     heat_down = heat_trend < -0.05
 
-    if sentiment < 20 and heat < 25 and divergence < 0.35:
+    if sentiment < 30 and heat < 25 and divergence < 0.35:
         return ("冰点期", "❄️", "#722ed1", 5,
                 "一致性悲观，关注度低迷，市场情绪降至冰点")
 
-    if sentiment > 80 and heat > 75 and divergence < 0.35:
+    if sentiment > 70 and heat > 75 and divergence < 0.35:
         return ("过热期", "🔥", "#f5222d", 5,
                 "一致性乐观，热度爆表，注意回调风险")
 
@@ -98,7 +98,7 @@ def _match_pattern(sentiment, heat, divergence, sent_trend=0, heat_trend=0):
         return ("低迷期", "🥶", "#722ed1", 5,
                 "情绪偏空，热度低迷，市场关注度低")
 
-    return ("震荡期", "📊", "#8c8c8c", 2,
+    return ("震荡期", "📊", "#8c8c8c", 0,
             f"情绪{s_level}，热度{h_level}，分歧{d_level}")
 
 

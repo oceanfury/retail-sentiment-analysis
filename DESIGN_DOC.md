@@ -1,6 +1,6 @@
 # 散户情绪分析系统 — 详细设计文档
 
-> **版本**：v1.0 | **更新日期**：2026-09-03 | **适用项目**：Retail\_sentiment
+> **版本**：v1.2 | **更新日期**：2026-09-04 | **适用项目**：Retail\_sentiment
 
 ***
 
@@ -26,19 +26,21 @@
 
 ### 1.1 目标
 
-采集东方财富股吧和雪球两大散户聚集平台的讨论数据，基于词典法情感分析计算个股情绪指数、热度评分和分歧度，最终生成可视化 HTML 日报，辅助判断散户情绪走向。
+采集东方财富股吧和雪球两大散户聚集平台的讨论数据，对热门股使用词典法、自选股使用 Deepseek 大模型进行情绪分析，计算个股情绪指数、热度评分和分歧度，最终生成可视化 HTML 日报和双平台对比报告，辅助判断散户情绪走向。
 
 ### 1.2 核心特点
 
 - **双平台独立**：股吧和雪球分别采集、独立计算、分别生成报告
 
-- **词典法情感分析**：自建情感词典，支持修饰词、否定词、歧义词上下文判断
+- **双引擎情绪分析**：热门股使用词典法（速度快），自选股使用 Deepseek 大模型（语义准）
 
 - **当日帖子过滤**：只分析当天发布的帖子，避免历史数据干扰
 
 - **增量采集**：支持一天内多次运行，帖子自动去重合并
 
-- **自选股监控**：独立配置关注股票，平台隔离计算
+- **自选股监控**：独立配置关注股票，平台隔离计算，大模型分析情绪
+
+- **双平台对比报告**：自选股对比报告由 LLM 生成市场总结、操作建议和关键发现
 
 - **历史趋势**：90天滚动存储，ECharts 趋势图展示
 
@@ -56,17 +58,20 @@ Retail_sentiment/
 ├── collectors/
 │   ├── hot_stocks.py           # 热门股票列表获取（股吧人气榜）
 │   ├── guba_crawler.py         # 股吧帖子采集
-│   └── xueqiu_crawler.py       # 雪球帖子采集
+│   ├── xueqiu_crawler.py       # 雪球帖子采集
+│   └── market_heat.py          # 东方财富APP UV指数采集
 ├── analysis/
-│   ├── sentiment.py            # 情绪分析引擎（单帖打分）
+│   ├── sentiment.py            # 情绪分析引擎（词典法，热门股用）
+│   ├── llm_sentiment.py        # Deepseek 大模型情绪分析（自选股用）
 │   ├── metrics.py              # 指标计算（个股/市场级）
 │   └── cycle_model.py          # 多维周期状态模型
 ├── storage/
 │   └── data_store.py           # 数据读写（JSON/CSV/历史快照）
 ├── report/
-│   ├── report_generator.py     # 报告渲染
+│   ├── report_generator.py     # 报告渲染（单平台 + 双平台对比）
 │   └── templates/
-│       └── report.html         # Jinja2 HTML 模板
+│       ├── report.html         # 单平台 Jinja2 HTML 模板
+│       └── watchlist_compare.html  # 自选股对比报告模板
 ├── browsers/                   # Playwright Chromium（平台相关）
 └── data/
     ├── raw/                    # 原始数据 + 聚合数据 + 历史
@@ -79,7 +84,7 @@ Retail_sentiment/
 | ------- | ----------------------------------------------- |
 | 数据采集    | Playwright（无头 Chromium）+ curl\_cffi（东方财富行情 API） |
 | HTML 解析 | BeautifulSoup4 + lxml                           |
-| 情绪分析    | 自建情感词典 + 规则匹配（jieba 分词辅助）                       |
+| 情绪分析    | 热门股：自建情感词典 + 规则匹配；自选股：Deepseek 大模型（批量并发）        |
 | 指标计算    | 纯 Python 加权/简单平均 + 对数缩放                         |
 | 数据存储    | JSON（主要）+ CSV（导出）                               |
 | 报告渲染    | Jinja2 模板引擎 + ECharts 图表                        |
@@ -104,23 +109,31 @@ Retail_sentiment/
 │  （增量合并：加载当天已有数据，按 post_id 去重追加）     │
 ├─────────────────────────────────────────────────────┤
 │  Step 3: 情绪分析                                    │
-│  └─ analyzer.analyze_post(post) → 每帖打分           │
-│     返回 {sentiment, score[-1,1], confidence, ...}   │
+│  ├─ 热门股: analyzer.analyze_post(post) → 词典法每帖打分 │
+│  │  返回 {sentiment, score[-1,1], confidence, ...}   │
+│  └─ 自选股: analyze_posts_with_llm() → Deepseek大模型 │
+│     批量并发调用，返回与词典法兼容的结构                          │
 ├─────────────────────────────────────────────────────┤
-│  Step 4: 指标计算（按平台独立）                        │
+│  Step 4: 采集市场热度                                │
+│  └─ fetch_market_heat() → 东方财富APP UV指数          │
+│     （股吧整体热度 = UV归一化，滞后约6天，临时值自动回填） │
+├─────────────────────────────────────────────────────┤
+│  Step 5: 指标计算（按平台独立）                        │
 │  ├─ calculate_stock_metrics()  → 个股指标             │
 │  ├─ calculate_market_overview() → 市场概览            │
 │  └─ determine_cycle_stage()    → 周期状态             │
 ├─────────────────────────────────────────────────────┤
-│  Step 5: 数据保存                                    │
+│  Step 6: 数据保存                                    │
 │  ├─ save_daily_data()     → 聚合 JSON                │
 │  ├─ save_raw_posts_json() → 原始帖子 JSON             │
 │  ├─ save_raw_posts_csv()  → 原始帖子 CSV              │
 │  └─ save_history_snapshot() → 历史快照                │
 ├─────────────────────────────────────────────────────┤
-│  Step 6: 报告生成                                    │
+│  Step 7: 报告生成                                    │
 │  ├─ 股吧报告 → guba_report_{date}.html               │
-│  └─ 雪球报告 → xueqiu_report_{date}.html              │
+│  ├─ 雪球报告 → xueqiu_report_{date}.html              │
+│  └─ 自选股对比报告 → watchlist_compare_{date}.html      │
+│     （LLM 生成市场总结/操作建议/关键发现，规则引擎兜底）   │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -365,6 +378,51 @@ python main.py --report-only --date 20260903
 
 最终：有否定 → 翻转方向；有程度/增强 → 放大/缩小。
 
+### 5.5 Deepseek 大模型情绪分析（自选股专用）
+
+`analysis/llm_sentiment.py` 中的 `analyze_posts_with_llm()` 函数对自选股帖子使用 Deepseek 大模型进行情绪分类，替代词典法。
+
+#### 设计动机
+
+- 词典法对复杂语义帖子容易误判（如"跌到XX我买"是看多、"清仓了后面会涨"是看多）
+- 自选股帖子数量少（每只约 3-50 条），LLM 调用成本可控
+- 大模型能理解上下文、反讽、隐含情绪，准确率更高
+
+#### 调用流程
+
+1. 帖子分批（`LLM_BATCH_SIZE=20` 条/批）
+2. 构建批量 prompt（含判断规则和注意事项，如"跌到XX我买"是看多）
+3. 多线程并发调用 Deepseek API（`LLM_CONCURRENCY=3` 路并发）
+4. 解析 JSON 返回，映射为与词典法兼容的格式
+5. 失败时自动重试（`LLM_MAX_RETRIES=3`，指数退避）
+6. 全部失败时回退到词典法（`get_sentiment_analyzer`）
+
+#### 返回格式（与词典法兼容）
+
+```python
+{
+    "sentiment": "positive/negative/neutral",
+    "score": 0.8,          # [-1, 1]
+    "confidence": 0.8,
+    "positive_count": 1,   # 1 if positive else 0
+    "negative_count": 1,   # 1 if negative else 0
+    "positive_words": [],  # 空列表（LLM不返回词）
+    "negative_words": [],
+}
+```
+
+#### 对比报告 LLM 生成
+
+`generate_watchlist_analysis()` 函数调用 Deepseek 生成自选股对比报告的三部分内容：
+
+| 输出字段           | 说明                                       |
+| ---------------- | ---------------------------------------- |
+| `market_summary` | 50字以内市场整体总结                               |
+| `suggestions`    | 每只自选股一条：方向（偏多/偏空/谨慎/中性/回避）+ 建议 + 理由       |
+| `insights`       | 2-4条关键发现：标题 + 相关股票 + 分析 + 信号 + 卡片类型       |
+
+调用失败时回退到规则引擎（`generate_watchlist_compare_report` 内 if-else 规则匹配）。
+
 ***
 
 ## 6. 指标计算逻辑
@@ -410,31 +468,31 @@ sentiment_index = clamp(0, 100)
 #### 股吧热度（对数缩放人气排名）
 
 ```
-heat_score = max(0, (1 - log10(guba_rank) / log10(GUBA_RANK_MAX)) × 100)
+heat_score = max(0, (1 - (guba_rank - 1)^0.3 / GUBA_RANK_MAX^0.3) × 100)
 ```
 
-- `GUBA_RANK_MAX = 5500`（基准总股票数）
-
-- 第 1 名 → 100 分，第 5500 名 → 0 分
-
-- 对数缩放：头部排名差距大，尾部差距小
+- 幂函数缩放（指数0.3）：比log10衰减更平缓，避免中后段排名热度偏低
+- 第1名=100分，第20名≈82分，第100名≈70分，第500名≈51分
+- `GUBA_RANK_MAX = 5500`（基准总股票数，从人气榜页面动态获取，回退到配置值）
 
 > 排名从股吧人气排名页获取，如果获取失败则热度为 0。
 
-#### 雪球热度（互动量 + 关注量）
+#### 雪球热度（互动量70% + 关注量30%）
 
 ```
-interaction_score = log10(total_interactions) / log10(2000) × 50    # 满分50
-follow_score = log10(follow_count) / log10(100000) × 50             # 满分50
+interaction_score = log10(total_interactions) / log10(2000) × 70    # 满分70
+follow_score = log10(follow_count) / log10(500000) × 30             # 满分30
 heat_score = interaction_score + follow_score
 ```
 
-- 互动量基准 2000，关注量基准 100000
+- 互动量基准 2000，关注量基准 500000
 
-- 两者各占 50%，对数缩放
+- 互动量权重70%，关注量权重30%，对数缩放
 
 - `total_interactions` = 所有帖子的互动量总和
 
+> 权重 70/30：互动量代表当日讨论活跃度，关注量代表长期关注度。互动量权重更高，使热度能反映每日讨论变化。
+> 关注量基准 50万：避免关注量主导热度（旧基准10万时，3.8万关注即得91.7%分数）。
 > 移除了帖子数权重，因为雪球 API 每只股票返回约 10 条帖子，帖子数区分度不足。
 
 ### 6.3 分歧度
@@ -473,12 +531,56 @@ neutral_count = total - bullish - bearish
 
 > 按热度加权平均：越热门的股票对市场情绪影响越大。
 
-### 6.5 平台差异对照
+### 6.5 股吧整体热度（东方财富APP UV指数）
+
+由于股吧个股热度基于排名（前20名固定），整体热度每天基本不变。为使整体热度有波动参考价值，引入**东方财富APP的UV指数**作为股吧整体热度的外部基准。
+
+> 东方财富APP是绝大多数用户访问股吧的入口，APP的UV（独立访客数）与股吧讨论热度高度正相关。
+
+#### 数据来源
+
+- **接口**：`https://www.apppc.com/index.php?m=content&c=index&a=datashowJson&id=3Eves1NRcX10yZ`
+
+- **字段**：UV指数（移动独立访客数，单位：万）
+
+- **历史**：支持传 `datatime=YYYY-MM-DD` 获取历史数据；`getLastDatas&type=90` 可拉取90天时序
+
+#### 归一化公式
+
+```
+overall_heat = (uv_index - UV_LOW) / (UV_HIGH - UV_LOW) × 100
+overall_heat = clamp(0, 100)
+```
+
+- `UV_LOW = 5000`（万）→ 0 分
+
+- `UV_HIGH = 9000`（万）→ 100 分
+
+> 配置项在 `config/settings.py`：`MARKET_HEAT_UV_LOW`、`MARKET_HEAT_UV_HIGH`
+
+#### 数据滞后处理
+
+apppc.com 数据滞后约 **6 天**。处理策略：
+
+| 日期类型     | 处理方式       | 标记                      |
+| -------- | ---------- | ----------------------- |
+| 有真实数据的日期 | 直接使用       | `is_provisional: false` |
+| 滞后期内的日期  | 用最近一周平均值填充 | `is_provisional: true`  |
+
+每次运行时拉取最新数据，新的真实值自动覆盖之前的临时值（回填机制）。
+
+#### 报告展示
+
+- 热度卡片显示数值 + "（临）"标记（临时值时）
+
+- 副标题标注数据来源：「数据来源：apppc.com 东方财富APP UV指数」
+
+### 6.6 平台差异对照
 
 | 维度    | 股吧        | 雪球              |
 | ----- | --------- | --------------- |
 | 情绪计算  | 简单算术平均    | 互动量加权平均         |
-| 热度来源  | 人气排名对数缩放  | 互动量50% + 关注量50% |
+| 热度来源  | 人气排名对数缩放  | 互动量70% + 关注量30% |
 | 权重限制  | 无（每帖一票）   | 单帖 ≤ 总权重10%     |
 | 用户画像  | 散户为主      | 偏专业投资者          |
 | 帖子数特征 | 较多（几十到几百） | 较少（\~10条/股）     |
@@ -493,11 +595,11 @@ neutral_count = total - bullish - bearish
 
 | 范围   | 标签   |
 | ---- | ---- |
-| ≥ 80 | 极度乐观 |
+| ≥ 70 | 极度乐观 |
 | ≥ 55 | 偏多   |
 | ≥ 45 | 中性   |
-| ≥ 20 | 偏空   |
-| < 20 | 极度悲观 |
+| ≥ 30 | 偏空   |
+| < 30 | 极度悲观 |
 
 #### 热度维度（`_heat_level`）
 
@@ -534,12 +636,12 @@ trend < -0.05 → 下降 (↓)
 
 按优先级从高到低匹配，命中一个即停止：
 
-`_match_pattern` 返回 5 元组 `(pattern_name, emoji, color, css_class, signal)`，其中 `css_class` 用于前端样式分级（1=低位, 2=正常, 4=预警, 5=极端）。
+`_match_pattern` 返回 5 元组 `(pattern_name, emoji, color, css_class, signal)`，其中 `css_class` 用于前端样式分级（0=中性灰, 1=低位绿, 2=正常蓝, 3=高位红, 4=预警橙, 5=极端紫）。
 
 | #  | 模式  | 判断条件                                             | 颜色         | CSS等级 | 信号                       |
 | -- | --- | ------------------------------------------------ | ---------- | ----- | ------------------------ |
-| 1  | 冰点期 | 情绪<20 AND 热度<25 AND 分歧<0.35                      | 紫(#722ed1) | 5     | 一致性悲观，关注度低迷，市场情绪降至冰点     |
-| 2  | 过热期 | 情绪>80 AND 热度>75 AND 分歧<0.35                      | 红(#f5222d) | 5     | 一致性乐观，热度爆表，注意回调风险        |
+| 1  | 冰点期 | 情绪<30 AND 热度<25 AND 分歧<0.35                      | 紫(#722ed1) | 5     | 一致性悲观，关注度低迷，市场情绪降至冰点     |
+| 2  | 过热期 | 情绪>70 AND 热度>75 AND 分歧<0.35                      | 红(#f5222d) | 5     | 一致性乐观，热度爆表，注意回调风险        |
 | 3  | 加速期 | 情绪>55 AND 热度>50 AND 0.35≤分歧<0.65 AND 情绪↑ AND 热度↑ | 蓝(#1890ff) | 2     | 情绪偏多且上升，热度活跃且上升，多头氛围浓厚   |
 | 4  | 退热期 | 情绪>55 AND 热度>50 AND 0.35≤分歧<0.65 AND 情绪↓ AND 热度↓ | 橙(#fa8c16) | 4     | 情绪仍偏多但下降，热度开始回落，炒作可能接近尾声 |
 | 5  | 活跃期 | 情绪>55 AND 热度>50 AND 0.35≤分歧<0.65（非加速/退热）         | 蓝(#1890ff) | 2     | 情绪偏多，讨论活跃，多空仍在博弈         |
@@ -548,7 +650,7 @@ trend < -0.05 → 下降 (↓)
 | 8  | 分歧期 | 分歧>0.65                                          | 橙(#fa8c16) | 4     | 多空分歧极大，方向不明，需等待信号确认      |
 | 9  | 存量期 | 情绪>55 AND 热度<30                                  | 紫(#722ed1) | 5     | 情绪偏多但热度低迷，可能是存量博弈或底部缓慢吸筹 |
 | 10 | 低迷期 | 情绪<45 AND 热度<25                                  | 紫(#722ed1) | 5     | 情绪偏空，热度低迷，市场关注度低         |
-| 11 | 震荡期 | 默认兜底                                             | 灰(#8c8c8c) | 2     | 动态拼接当前三维状态               |
+| 11 | 震荡期 | 默认兜底                                             | 灰(#8c8c8c) | 0     | 动态拼接当前三维状态               |
 
 > **注意**：`_match_pattern` 必须返回完整的 5 元组。此前"过热期"分支遗漏了 `css_class` 参数（只返回 4 个值），导致解包报 `ValueError: not enough values to unpack`，已于 2026-09-03 修复，补全 `css_class=5`。
 
@@ -578,18 +680,19 @@ confidence = clamp(0.1, 0.95)
 
 所有数据文件存于 `data/raw/`：
 
-| 文件名模式                             | 用途            | 写入时机   |
-| --------------------------------- | ------------- | ------ |
-| `guba_data_{date}.json`           | 股吧每日聚合数据      | Step 5 |
-| `xueqiu_data_{date}.json`         | 雪球每日聚合数据      | Step 5 |
-| `guba_posts_{date}.csv`           | 股吧原始帖子 CSV 导出 | Step 5 |
-| `xueqiu_posts_{date}.csv`         | 雪球原始帖子 CSV 导出 | Step 5 |
-| `guba_raw_posts_{date}.json`      | 股吧原始帖子（增量合并用） | Step 2 |
-| `xueqiu_raw_posts_{date}.json`    | 雪球原始帖子（增量合并用） | Step 2 |
-| `guba_wl_raw_posts_{date}.json`   | 股吧自选股原始帖子     | Step 2 |
-| `xueqiu_wl_raw_posts_{date}.json` | 雪球自选股原始帖子     | Step 2 |
-| `history.json`                    | 市场级历史快照（90天）  | Step 5 |
-| `watchlist_history.json`          | 自选股历史快照（90天）  | Step 5 |
+| 文件名模式                             | 用途             | 写入时机   |
+| --------------------------------- | -------------- | ------ |
+| `guba_data_{date}.json`           | 股吧每日聚合数据       | Step 5 |
+| `xueqiu_data_{date}.json`         | 雪球每日聚合数据       | Step 5 |
+| `guba_posts_{date}.csv`           | 股吧原始帖子 CSV 导出  | Step 5 |
+| `xueqiu_posts_{date}.csv`         | 雪球原始帖子 CSV 导出  | Step 5 |
+| `guba_raw_posts_{date}.json`      | 股吧原始帖子（增量合并用）  | Step 2 |
+| `xueqiu_raw_posts_{date}.json`    | 雪球原始帖子（增量合并用）  | Step 2 |
+| `guba_wl_raw_posts_{date}.json`   | 股吧自选股原始帖子      | Step 2 |
+| `xueqiu_wl_raw_posts_{date}.json` | 雪球自选股原始帖子      | Step 2 |
+| `market_heat.json`                | 东方财富APP UV指数历史 | Step 4 |
+| `history.json`                    | 市场级历史快照（90天）   | Step 6 |
+| `watchlist_history.json`          | 自选股历史快照（90天）   | Step 6 |
 
 报告文件存于 `data/reports/`：
 
@@ -597,6 +700,7 @@ confidence = clamp(0.1, 0.95)
 | --------------------------- | ------ |
 | `guba_report_{date}.html`   | 股吧情绪日报 |
 | `xueqiu_report_{date}.html` | 雪球情绪日报 |
+| `watchlist_compare_{date}.html` | 自选股双平台对比报告 |
 
 ### 8.2 聚合数据 JSON 结构
 
@@ -708,11 +812,46 @@ sentiment, score, confidence, url
 
 | 模块   | 股吧报告                        | 雪球报告                              |
 | ---- | --------------------------- | --------------------------------- |
-| 标题   | "股吧情绪日报"                    | "雪球情绪日报"                          |
+| 标题   | "混市FAN股吧情绪报告"               | "混市FAN雪球情绪报告"                     |
+| Logo | 标题栏左侧显示混市FAN电风扇图标           | 同左                                |
 | 选股来源 | 股吧人气榜 TOP20                 | 雪球热股榜 TOP20                       |
 | 情绪计算 | 简单平均                        | 互动量加权                             |
-| 热度公式 | 人气排名对数                      | 互动量+关注量                           |
+| 热度公式 | 人气排名对数                      | 互动量70%+关注量30%                      |
 | 帖子字段 | read\_count, comment\_count | 额外有 like\_count, stock\_followers |
+
+### 9.4 自选股对比报告（`generate_watchlist_compare_report`）
+
+第三份报告，对自选股在股吧和雪球双平台的情绪数据进行横向对比。
+
+#### 生成流程
+
+1. 从股吧和雪球数据中提取各自选股指标
+2. 构建对比数据表（股价、涨跌幅、双平台情绪/热度/阶段/多空帖数、平台分歧度）
+3. **优先调用 LLM** 生成市场总结、操作建议、关键发现
+4. LLM 失败时**回退规则引擎**（if-else 规则判断方向、平台分歧、共振信号等）
+5. 渲染 `watchlist_compare.html` 模板
+6. 输出 `data/reports/watchlist_compare_{date}.html`
+
+#### 报告内容模块
+
+| 模块      | 数据来源                            | 说明                          |
+| ------- | ------------------------------- | --------------------------- |
+| 市场概览对比  | 股吧 + 雪球 overview               | 双平台并排：情绪/热度/阶段/多空           |
+| 市场总结    | LLM 生成                          | 50字以内市场整体概括                 |
+| 自选股对比表  | 双平台 watchlist\_metrics          | 11只自选股，含平台分歧度高亮             |
+| 明日操作建议  | LLM 生成（回退规则）                    | 每只股票：方向标签 + 具体建议 + 理由       |
+| 关键发现    | LLM 生成（回退规则）                    | 2-4张分析卡片（bullish/bearish/warning） |
+
+#### 方向标签映射
+
+LLM 返回的方向标签通过 `_dir_map` 映射到 CSS 类：
+
+| 方向   | CSS 类           | 颜色  |
+| ---- | --------------- | --- |
+| 偏多/看多 | sig-bullish    | 绿色  |
+| 偏空/看空/回避 | sig-bearish    | 红色  |
+| 谨慎   | sig-warning    | 橙色  |
+| 中性/— | sig-neutral    | 灰色  |
 
 ***
 
@@ -739,10 +878,12 @@ sentiment, score, confidence, url
 
 1. 从 `watchlist.json` 加载自选股列表
 2. 分股吧/雪球两个独立阶段采集
-3. 每只自选股独立计算指标（股吧简单平均，雪球加权+关注量）
-4. 历史数据按 `{stock_code}_{source}` 独立存储
-5. 报告中独立展示，含股价、涨跌幅、情绪、热度、多空分布、周期阶段
-6. 无帖子的自选股也会显示（情绪默认50，热度默认0，阶段为震荡期）
+3. **自选股使用 Deepseek 大模型分析帖子情绪**（热门股仍用词典法）
+4. 每只自选股独立计算指标（股吧简单平均，雪球加权+关注量）
+5. 历史数据按 `{stock_code}_{source}` 独立存储
+6. 报告中独立展示，含股价、涨跌幅、情绪、热度、多空分布、周期阶段
+7. 无帖子的自选股也会显示（情绪默认50，热度默认0，阶段为震荡期）
+8. 额外生成双平台对比报告（`watchlist_compare_{date}.html`）
 
 ### 10.3 平台隔离
 
@@ -752,7 +893,7 @@ sentiment, score, confidence, url
 
 - 情绪算法隔离（股吧简单平均 vs 雪球加权）
 
-- 热度算法隔离（排名 vs 互动量+关注量）
+- 热度算法隔离（排名 vs 互动量70%+关注量30%）
 
 - 历史存储隔离（`watchlist_history.json` 按 source 分 key）
 
@@ -835,8 +976,24 @@ trend < -0.05 → ↓
 | `XUEQIU_COOKIE`         | —                | 雪球 Cookie（xq\_a\_token + u） |
 | `XUEQIU_POST_COUNT`     | 50               | 雪球每只股票抓取数量                  |
 | `XUEQIU_REQUEST_DELAY`  | 2.5 秒            | 雪球请求间隔                      |
+| `MARKET_HEAT_APP_ID`    | `3Eves1NRcX10yZ` | 东方财富APP的apppc.com ID        |
+| `MARKET_HEAT_UV_LOW`    | 5000.0           | UV指数下限（=0分）                 |
+| `MARKET_HEAT_UV_HIGH`   | 9000.0           | UV指数上限（=100分）               |
+| `MARKET_HEAT_LAG_DAYS`  | 7                | 数据滞后天数（临时值填充窗口）             |
 
-### 12.3 其他配置
+### 12.3 Deepseek LLM 配置
+
+| 参数                      | 默认值                                | 说明                          |
+| ----------------------- | ---------------------------------- | --------------------------- |
+| `DEEPSEEK_API_KEY`      | —                                  | Deepseek API Key             |
+| `DEEPSEEK_API_URL`      | `https://api.deepseek.com/v1/chat/completions` | API 地址                      |
+| `DEEPSEEK_MODEL`        | `deepseek-chat`                    | 模型名                         |
+| `LLM_BATCH_SIZE`        | 20                                 | 每批帖子数                      |
+| `LLM_MAX_RETRIES`       | 3                                  | 最大重试次数                      |
+| `LLM_REQUEST_DELAY`     | 0.5 秒                              | 批次间延迟                       |
+| `LLM_CONCURRENCY`       | 3                                  | 并发批次数                       |
+
+### 12.4 其他配置
 
 | 参数                    | 默认值                          | 说明                   |
 | --------------------- | ---------------------------- | -------------------- |
@@ -876,11 +1033,11 @@ trend < -0.05 → ↓
 
 | 阈值     | 值       | 说明                  |
 | ------ | ------- | ------------------- |
-| 情绪极度乐观 | ≥ 80    | \_sentiment\_level  |
+| 情绪极度乐观 | ≥ 70    | \_sentiment\_level  |
 | 情绪偏多   | ≥ 55    | \_sentiment\_level  |
 | 情绪中性   | ≥ 45    | \_sentiment\_level  |
-| 情绪偏空   | ≥ 20    | \_sentiment\_level  |
-| 情绪极度悲观 | < 20    | \_sentiment\_level  |
+| 情绪偏空   | ≥ 30    | \_sentiment\_level  |
+| 情绪极度悲观 | < 30    | \_sentiment\_level  |
 | 热度过热   | ≥ 75    | \_heat\_level       |
 | 热度活跃   | ≥ 50    | \_heat\_level       |
 | 热度适中   | ≥ 25    | \_heat\_level       |
@@ -895,12 +1052,12 @@ trend < -0.05 → ↓
 
 ### 13.4 置信度权重
 
-| 因子    | 权重  | 说明             |                |      |             |       |
-| ----- | --- | -------------- | -------------- | ---- | ----------- | ----- |
-| 情绪极端度 | 0.3 | <br />         | sentiment - 50 | / 50 |             |       |
-| 热度极端度 | 0.3 | heat / 100     |                |      |             |       |
-| 趋势强度  | 0.2 | (              | sent\_trend    | +    | heat\_trend | ) / 2 |
-| 一致性因子 | 0.2 | 1 - divergence |                |      |             |       |
+| 因子    | 权重  | 说明             | <br />         | <br /> | <br />      | <br /> |
+| ----- | --- | -------------- | -------------- | ------ | ----------- | ------ |
+| 情绪极端度 | 0.3 | <br />         | sentiment - 50 | / 50   | <br />      | <br /> |
+| 热度极端度 | 0.3 | heat / 100     | <br />         | <br /> | <br />      | <br /> |
+| 趋势强度  | 0.2 | (              | sent\_trend    | +      | heat\_trend | ) / 2  |
+| 一致性因子 | 0.2 | 1 - divergence | <br />         | <br /> | <br />      | <br /> |
 
 ### 13.5 历史数据保留
 

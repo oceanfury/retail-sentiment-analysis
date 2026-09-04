@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>混市FAN自选股对比报告 - {{ date }}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: #f5f7fa;
+            color: #333;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        .header-logo {
+            width: 80px; height: 80px;
+            border-radius: 12px;
+            flex-shrink: 0;
+            object-fit: cover;
+            background: white;
+        }
+        .header-text { flex: 1; }
+        .header h1 { font-size: 28px; margin-bottom: 8px; }
+        .header .subtitle { opacity: 0.9; font-size: 14px; }
+        .header .meta { margin-top: 12px; font-size: 13px; opacity: 0.8; }
+
+        .section {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .section-title {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        /* 对比表格 */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        th, td {
+            padding: 10px 8px;
+            text-align: center;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        th {
+            background: #fafafa;
+            font-weight: bold;
+            color: #666;
+            font-size: 12px;
+        }
+        th.platform-header {
+            background: #f0f5ff;
+            color: #1890ff;
+        }
+        th.guba-header { background: #fff7e6; color: #fa8c16; }
+        th.xueqiu-header { background: #e6f7ff; color: #1890ff; }
+        td.stock-name { text-align: left; font-weight: bold; }
+        td.stock-code { color: #999; font-size: 12px; }
+        .pos { color: #f5222d; font-weight: bold; }
+        .neg { color: #52c41a; font-weight: bold; }
+        .neu { color: #999; }
+        .divergence-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .div-high { background: #fff1f0; color: #f5222d; }
+        .div-mid { background: #fff7e6; color: #fa8c16; }
+        .div-low { background: #f6ffed; color: #52c41a; }
+
+        /* 信号标签 */
+        .signal-tag {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .sig-bullish { background: #f6ffed; color: #52c41a; }
+        .sig-bearish { background: #fff1f0; color: #f5222d; }
+        .sig-neutral { background: #fafafa; color: #8c8c8c; }
+        .sig-warning { background: #fff7e6; color: #fa8c16; }
+
+        /* 平台分歧高亮 */
+        .platform-diverge {
+            background: #fffbe6;
+        }
+        .platform-agree-bull {
+            background: #fff1f0;
+        }
+        .platform-agree-bear {
+            background: #f6ffed;
+        }
+
+        .market-overview {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .platform-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .platform-card.guba { border-left: 4px solid #fa8c16; }
+        .platform-card.xueqiu { border-left: 4px solid #1890ff; }
+        .platform-card h3 { font-size: 16px; margin-bottom: 12px; }
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            font-size: 14px;
+        }
+        .stat-row .label { color: #999; }
+        .stat-row .value { font-weight: bold; }
+
+        .analysis-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            border-left: 4px solid #1890ff;
+        }
+        .analysis-card.bearish { border-left-color: #52c41a; }
+        .analysis-card.bullish { border-left-color: #f5222d; }
+        .analysis-card.warning { border-left-color: #fa8c16; }
+        .analysis-card h4 { font-size: 16px; margin-bottom: 8px; }
+        .analysis-card .stock-tags { margin-bottom: 8px; }
+        .analysis-card p { font-size: 14px; color: #555; }
+        .analysis-card .signal { margin-top: 8px; font-size: 13px; color: #999; }
+
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #999;
+            font-size: 12px;
+        }
+
+        .heat-bar {
+            display: inline-block;
+            width: 60px;
+            height: 8px;
+            background: #f0f0f0;
+            border-radius: 4px;
+            vertical-align: middle;
+            margin-right: 4px;
+        }
+        .heat-fill {
+            height: 100%;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <img class="header-logo" src="logo_hunshifan_v4.jpg" alt="logo">
+        <div class="header-text">
+            <h1>混市FAN自选股对比报告</h1>
+            <div class="subtitle">股吧 vs 雪球 双平台散户情绪对比分析</div>
+            <div class="meta">数据日期：{{ date }} | 生成时间：{{ generated_at }}</div>
+        </div>
+    </div>
+
+    <!-- 市场概览对比 -->
+    <div class="market-overview">
+        <div class="platform-card guba">
+            <h3>📊 股吧市场概览</h3>
+            <div class="stat-row"><span class="label">整体情绪</span><span class="value">{{ guba_overview.sentiment_index | default('—') }}</span></div>
+            <div class="stat-row"><span class="label">大盘热度</span><span class="value">{{ guba_overview.overall_heat | default('—') }}{% if guba_overview.heat_is_provisional %} (临){% endif %}</span></div>
+            <div class="stat-row"><span class="label">市场阶段</span><span class="value">{{ guba_overview.cycle_stage.stage_emoji | default('') }} {{ guba_overview.cycle_stage.stage_name | default('—') }}</span></div>
+            <div class="stat-row"><span class="label">看多/看空</span><span class="value"><span class="pos">{{ guba_overview.bullish_count | default(0) }}</span> / <span class="neg">{{ guba_overview.bearish_count | default(0) }}</span></span></div>
+        </div>
+        <div class="platform-card xueqiu">
+            <h3>❄️ 雪球市场概览</h3>
+            <div class="stat-row"><span class="label">整体情绪</span><span class="value">{{ xueqiu_overview.sentiment_index | default('—') }}</span></div>
+            <div class="stat-row"><span class="label">大盘热度</span><span class="value">{{ xueqiu_overview.overall_heat | default('—') }}</span></div>
+            <div class="stat-row"><span class="label">市场阶段</span><span class="value">{{ xueqiu_overview.cycle_stage.stage_emoji | default('') }} {{ xueqiu_overview.cycle_stage.stage_name | default('—') }}</span></div>
+            <div class="stat-row"><span class="label">看多/看空</span><span class="value"><span class="pos">{{ xueqiu_overview.bullish_count | default(0) }}</span> / <span class="neg">{{ xueqiu_overview.bearish_count | default(0) }}</span></div>
+        </div>
+    </div>
+
+    <!-- 市场总结 -->
+    {% if market_summary %}
+    <div class="section" style="border-left: 4px solid #667eea;">
+        <div class="section-title">📋 市场总结</div>
+        <p style="font-size: 15px; line-height: 1.8; color: #333;">{{ market_summary }}</p>
+    </div>
+    {% endif %}
+
+    <!-- 自选股对比表格 -->
+    <div class="section">
+        <div class="section-title">📈 自选股双平台对比</div>
+        <table>
+            <thead>
+                <tr>
+                    <th rowspan="2">股票</th>
+                    <th rowspan="2">股价</th>
+                    <th rowspan="2">涨跌幅</th>
+                    <th colspan="4" class="guba-header">股吧</th>
+                    <th colspan="4" class="xueqiu-header">雪球</th>
+                    <th rowspan="2">平台分歧</th>
+                </tr>
+                <tr>
+                    <th class="guba-header">情绪</th>
+                    <th class="guba-header">热度</th>
+                    <th class="guba-header">阶段</th>
+                    <th class="guba-header">多/空/中</th>
+                    <th class="xueqiu-header">情绪</th>
+                    <th class="xueqiu-header">热度</th>
+                    <th class="xueqiu-header">阶段</th>
+                    <th class="xueqiu-header">多/空/中</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in comparison %}
+                <tr class="{{ item.row_class }}">
+                    <td class="stock-name">{{ item.stock_name }}<br><span class="stock-code">{{ item.stock_code }}</span></td>
+                    <td>{{ item.stock_price | default('—') }}</td>
+                    <td style="color: {{ '#f5222d' if item.change_percent > 0 else '#52c41a' if item.change_percent < 0 else '#999' }};">{{ '%+.2f' % item.change_percent if item.change_percent else '—' }}%</td>
+                    <!-- 股吧 -->
+                    <td>{{ '%.1f' % item.guba_sentiment if item.guba_sentiment else '—' }}</td>
+                    <td>
+                        <span class="heat-bar"><span class="heat-fill" style="width: {{ item.guba_heat or 0 }}%; background: #fa8c16;"></span></span>
+                        {{ '%.1f' % item.guba_heat if item.guba_heat else '—' }}
+                    </td>
+                    <td>{{ item.guba_emoji }} {{ item.guba_stage or '—' }}</td>
+                    <td><span class="pos">{{ item.guba_pos }}</span>/<span class="neg">{{ item.guba_neg }}</span>/<span class="neu">{{ item.guba_neu }}</span></td>
+                    <!-- 雪球 -->
+                    <td>{{ '%.1f' % item.xueqiu_sentiment if item.xueqiu_sentiment else '—' }}</td>
+                    <td>
+                        <span class="heat-bar"><span class="heat-fill" style="width: {{ item.xueqiu_heat or 0 }}%; background: #1890ff;"></span></span>
+                        {{ '%.1f' % item.xueqiu_heat if item.xueqiu_heat else '—' }}
+                    </td>
+                    <td>{{ item.xueqiu_emoji }} {{ item.xueqiu_stage or '—' }}</td>
+                    <td><span class="pos">{{ item.xueqiu_pos }}</span>/<span class="neg">{{ item.xueqiu_neg }}</span>/<span class="neu">{{ item.xueqiu_neu }}</span></td>
+                    <!-- 分歧 -->
+                    <td>
+                        {% if item.divergence_level == 'high' %}
+                        <span class="divergence-tag div-high">大</span>
+                        {% elif item.divergence_level == 'mid' %}
+                        <span class="divergence-tag div-mid">中</span>
+                        {% else %}
+                        <span class="divergence-tag div-low">小</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 操作建议 -->
+    <div class="section">
+        <div class="section-title">🎯 明日操作建议</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>股票</th>
+                    <th>方向</th>
+                    <th>建议</th>
+                    <th>理由</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in suggestions %}
+                <tr>
+                    <td class="stock-name">{{ s.stock_name }}</td>
+                    <td>
+                        {% if s.signal_class == 'sig-bullish' %}
+                        <span class="signal-tag sig-bullish">{{ s.direction }}</span>
+                        {% elif s.signal_class == 'sig-bearish' %}
+                        <span class="signal-tag sig-bearish">{{ s.direction }}</span>
+                        {% elif s.signal_class == 'sig-warning' %}
+                        <span class="signal-tag sig-warning">{{ s.direction }}</span>
+                        {% else %}
+                        <span class="signal-tag sig-neutral">{{ s.direction }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ s.action }}</td>
+                    <td style="text-align:left; font-size:13px; color:#555;">{{ s.reason }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 关键发现 -->
+    <div class="section">
+        <div class="section-title">🔍 关键发现</div>
+        {% for insight in insights %}
+        <div class="analysis-card {{ insight.card_class }}">
+            <h4>{{ insight.title }}</h4>
+            <div class="stock-tags">
+                {% for stock in insight.stocks %}
+                <span class="signal-tag sig-neutral" style="margin-right:6px;">{{ stock }}</span>
+                {% endfor %}
+            </div>
+            <p>{{ insight.analysis }}</p>
+            <div class="signal">{{ insight.signal }}</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="footer">
+        <p>混市FAN散户情绪分析系统 | 本报告基于股吧和雪球双平台数据自动生成</p>
+        <p>情绪指数：>70偏多，<30偏空，45-55中性 | 热度：排名/互动量归一化0-100 | 仅供参考，不构成投资建议</p>
+    </div>
+</div>
+</body>
+</html>
