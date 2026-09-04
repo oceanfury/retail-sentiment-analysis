@@ -6,7 +6,11 @@ from typing import List, Dict, Tuple
 from collections import defaultdict
 import sys
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent.parent))
-from config.settings import THEMES, GUBA_RANK_MAX
+from config.settings import (
+    THEMES, GUBA_RANK_MAX,
+    XUEQIU_HEAT_INTERACTION_WEIGHT, XUEQIU_HEAT_FOLLOW_WEIGHT,
+    XUEQIU_HEAT_INTERACTION_BASE, XUEQIU_HEAT_FOLLOW_BASE,
+)
 
 
 def calculate_stock_metrics(posts: List[Dict], stock_code: str, stock_name: str,
@@ -159,6 +163,7 @@ def calculate_stock_metrics(posts: List[Dict], stock_code: str, stock_name: str,
         "avg_confidence": round(total_confidence / max(total, 1), 4),
         "total_interactions": round(total_interactions, 0),
         "follow_count": follow_count,
+        "guba_rank": guba_rank,
         "source_breakdown": dict(source_breakdown),
     }
 
@@ -174,10 +179,11 @@ def _calculate_heat_v2(xueqiu_heat: float, guba_rank: int,
 
     has_guba = guba_rank > 0
 
-    # 股吧排名对数缩放：第1名=满分，第GUBA_RANK_MAX名=0分
+    # 股吧排名幂函数缩放：第1名=满分，第GUBA_RANK_MAX名=0分
+    # 使用指数0.3，衰减比log10慢，避免中后段排名热度偏低
     def guba_norm(max_score):
         if guba_rank > 0:
-            return max(0, (1 - math.log10(guba_rank) / math.log10(GUBA_RANK_MAX)) * max_score)
+            return max(0, (1 - (guba_rank - 1) ** 0.3 / GUBA_RANK_MAX ** 0.3) * max_score)
         return 0
 
     if has_guba:
@@ -192,19 +198,25 @@ def _calculate_heat(posts: List[Dict], total_interactions: float,
     """
     计算热度评分（0-100）
     使用对数函数，避免热门股票轻松满分，保持区分度
-    互动量50% + 关注量50%（雪球专用，帖子数恒为10无区分度）
+    互动量(70%) + 关注量(30%)（雪球专用，帖子数恒为10无区分度）
     """
     import math
 
-    # 互动量得分（对数缩放，2000互动量为满分基准）
+    # 互动量得分（对数缩放）
     if total_interactions > 0:
-        interaction_score = min(50, math.log10(total_interactions) / math.log10(2000) * 50)
+        interaction_score = min(
+            XUEQIU_HEAT_INTERACTION_WEIGHT,
+            math.log10(total_interactions) / math.log10(XUEQIU_HEAT_INTERACTION_BASE) * XUEQIU_HEAT_INTERACTION_WEIGHT
+        )
     else:
         interaction_score = 0
 
-    # 关注量得分（对数缩放，100000关注量为满分基准）
+    # 关注量得分（对数缩放）
     if follow_count > 0:
-        follow_score = min(50, math.log10(follow_count) / math.log10(100000) * 50)
+        follow_score = min(
+            XUEQIU_HEAT_FOLLOW_WEIGHT,
+            math.log10(follow_count) / math.log10(XUEQIU_HEAT_FOLLOW_BASE) * XUEQIU_HEAT_FOLLOW_WEIGHT
+        )
     else:
         follow_score = 0
 
@@ -256,13 +268,16 @@ def _match_themes(text: str) -> List[str]:
     return matched
 
 
-def calculate_market_overview(stock_metrics: List[Dict], all_posts: List[Dict]) -> Dict:
+def calculate_market_overview(stock_metrics: List[Dict], all_posts: List[Dict],
+                               market_heat: Dict = None) -> Dict:
     """
     计算市场整体情绪概览
 
     Args:
         stock_metrics: 各股票的情绪指标
         all_posts: 所有帖子
+        market_heat: 可选的大盘热度数据（来自外部数据源，如UV指数）
+            {"heat_score": float, "uv_index": float, "is_provisional": bool, "source": str}
 
     Returns:
         dict: 市场概览
@@ -275,6 +290,9 @@ def calculate_market_overview(stock_metrics: List[Dict], all_posts: List[Dict]) 
             "total_stocks": 0,
             "bullish_ratio": 0.0,
             "bearish_ratio": 0.0,
+            "heat_is_provisional": False,
+            "heat_source": "internal",
+            "heat_uv_index": 0,
         }
 
     total_posts = sum(m["total_posts"] for m in stock_metrics)
@@ -292,17 +310,30 @@ def calculate_market_overview(stock_metrics: List[Dict], all_posts: List[Dict]) 
     bullish_stocks = sum(1 for m in stock_metrics if m["sentiment_index"] > 50)
     bearish_stocks = sum(1 for m in stock_metrics if m["sentiment_index"] <= 50)
 
-    overall_heat = sum(m["heat_score"] for m in stock_metrics) / len(stock_metrics)
+    # 整体热度：如果有外部大盘热度数据则使用，否则用个股热度均值
+    if market_heat and market_heat.get("heat_score", 0) > 0:
+        overall_heat = round(market_heat["heat_score"], 1)
+        heat_is_provisional = market_heat.get("is_provisional", False)
+        heat_source = market_heat.get("source", "external")
+        heat_uv_index = market_heat.get("uv_index", 0)
+    else:
+        overall_heat = round(sum(m["heat_score"] for m in stock_metrics) / len(stock_metrics), 1)
+        heat_is_provisional = False
+        heat_source = "internal"
+        heat_uv_index = 0
 
     return {
         "overall_sentiment": round(weighted_sentiment, 2),
-        "overall_heat": round(overall_heat, 2),
+        "overall_heat": overall_heat,
         "total_posts": total_posts,
         "total_stocks": len(stock_metrics),
         "bullish_ratio": round(bullish_stocks / max(len(stock_metrics), 1), 4),
         "bearish_ratio": round(bearish_stocks / max(len(stock_metrics), 1), 4),
         "bullish_count": bullish_stocks,
         "bearish_count": bearish_stocks,
+        "heat_is_provisional": heat_is_provisional,
+        "heat_source": heat_source,
+        "heat_uv_index": heat_uv_index,
     }
 
 

@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 散户情绪分析系统 - 主入口
 每日手动运行，生成雪球情绪日报 + 股吧情绪日报
@@ -35,8 +35,13 @@ from storage.data_store import (
     save_daily_data, save_raw_posts_csv, save_history_snapshot, load_history,
     save_watchlist_history, load_watchlist_history,
     save_raw_posts_json, load_raw_posts_json,
+    save_market_heat, load_market_heat, get_market_heat_by_date,
 )
 from report.report_generator import generate_report
+from collectors.market_heat import (
+    fetch_uv_history, build_market_heat_data,
+    get_market_heat_for_date, close_browser as close_market_heat_browser,
+)
 
 WATCHLIST_FILE = BASE_DIR / "config" / "watchlist.json"
 
@@ -77,7 +82,7 @@ def _to_xq_symbol(code: str) -> str:
 
 
 def _analyze_source(posts: List[Dict], hot_stocks: List[Dict],
-                    source: str) -> Dict:
+                    source: str, market_heat: Dict = None) -> Dict:
     """
     对单一来源的帖子进行情绪分析、指标计算和周期判断
 
@@ -85,6 +90,7 @@ def _analyze_source(posts: List[Dict], hot_stocks: List[Dict],
         posts: 该来源的帖子列表（已带情绪分析结果）
         hot_stocks: 热门股票列表
         source: 来源标识（"xueqiu" / "guba"）
+        market_heat: 可选的大盘热度数据（用于覆盖整体热度）
 
     Returns:
         dict: 完整的分析结果数据
@@ -124,8 +130,8 @@ def _analyze_source(posts: List[Dict], hot_stocks: List[Dict],
 
     stock_metrics.sort(key=lambda x: x["heat_score"], reverse=True)
 
-    # 计算市场概览
-    overview = calculate_market_overview(stock_metrics, posts)
+    # 计算市场概览（股吧使用外部大盘热度数据）
+    overview = calculate_market_overview(stock_metrics, posts, market_heat=market_heat)
 
     # 计算市场周期
     market_cycle = determine_market_cycle(overview, [], stock_metrics)
@@ -303,8 +309,11 @@ def run_sentiment_analysis(stock_count: int = None, guba_pages: int = None,
 
     guba_with_sent = analyze_posts(guba_posts_list) if not skip_guba else []
     xueqiu_with_sent = analyze_posts(xueqiu_posts_list) if not skip_xueqiu else []
-    watchlist_guba_sent = analyze_posts(watchlist_guba_posts) if watchlist_guba_posts else []
-    watchlist_xq_sent = analyze_posts(watchlist_xq_posts) if watchlist_xq_posts else []
+
+    # 自选股使用大模型分析（Deepseek）
+    from analysis.llm_sentiment import analyze_posts_with_llm
+    watchlist_guba_sent = analyze_posts_with_llm(watchlist_guba_posts) if watchlist_guba_posts else []
+    watchlist_xq_sent = analyze_posts_with_llm(watchlist_xq_posts) if watchlist_xq_posts else []
 
     # 增量合并：当天多次采集时，与已有帖子去重合并
     date_str = datetime.now().strftime("%Y%m%d")
@@ -426,13 +435,47 @@ def run_sentiment_analysis(stock_count: int = None, guba_pages: int = None,
                       f"情绪{metrics['sentiment_index']:.1f}, 热度{metrics['heat_score']:.1f}, "
                       f"{metrics['cycle_stage']['stage_emoji']} {metrics['cycle_stage']['stage_name']}")
 
-    # ========== 4. 计算指标（按来源分开）==========
-    print(f"\n📐 [4/5] 计算情绪指标...")
+    # ========== 4. 采集市场热度（大盘UV指数）==========
+    print(f"\n📈 [4/6] 采集市场热度数据...")
+    market_heat_data = {}
+    guba_market_heat_today = None
+
+    if not skip_guba:
+        try:
+            uv_history = fetch_uv_history(90)
+            if uv_history:
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                market_heat_data = build_market_heat_data(uv_history, today_str)
+
+                # 保存（回填历史真实值，更新临时值）
+                save_market_heat(market_heat_data)
+
+                # 取今天的热度数据
+                guba_market_heat_today = market_heat_data.get(today_str, {})
+                if guba_market_heat_today:
+                    status = "临时值" if guba_market_heat_today.get("is_provisional") else "真实值"
+                    print(f"  ✓ 大盘热度: {guba_market_heat_today['heat_score']:.1f}分 "
+                          f"(UV={guba_market_heat_today['uv_index']:.0f}万, {status})")
+                else:
+                    print("  [WARN] 未获取到今日大盘热度")
+            else:
+                print("  [WARN] 市场热度采集失败，使用内部热度")
+        except Exception as e:
+            print(f"  [ERROR] 市场热度采集异常: {e}")
+        finally:
+            try:
+                close_market_heat_browser()
+            except:
+                pass
+
+    # ========== 5. 计算指标（按来源分开）==========
+    print(f"\n📐 [5/6] 计算情绪指标...")
 
     results = {}
 
     if guba_with_sent:
-        results["guba"] = _analyze_source(guba_with_sent, guba_hot_stocks, "guba")
+        results["guba"] = _analyze_source(guba_with_sent, guba_hot_stocks, "guba",
+                                            market_heat=guba_market_heat_today)
         print(f"  ✓ 股吧: {len(results['guba']['stock_metrics'])} 只股票，"
               f"情绪 {results['guba']['overview']['overall_sentiment']:.1f}，"
               f"{results['guba']['market_cycle']['stage_emoji']} {results['guba']['market_cycle']['stage_name']}")
@@ -443,11 +486,11 @@ def run_sentiment_analysis(stock_count: int = None, guba_pages: int = None,
               f"情绪 {results['xueqiu']['overview']['overall_sentiment']:.1f}，"
               f"{results['xueqiu']['market_cycle']['stage_emoji']} {results['xueqiu']['market_cycle']['stage_name']}")
 
-    # ========== 5. 保存数据 & 生成报告（按来源分开）==========
+    # ========== 6. 保存数据 & 生成报告（按来源分开）==========
     if collect_only:
-        print(f"\n💾 [5/5] 保存数据（跳过报告生成）...")
+        print(f"\n💾 [6/6] 保存数据（跳过报告生成）...")
     else:
-        print(f"\n📄 [5/5] 保存数据并生成报告...")
+        print(f"\n📄 [6/6] 保存数据并生成报告...")
 
     report_paths = {}
 
@@ -484,7 +527,7 @@ def run_sentiment_analysis(stock_count: int = None, guba_pages: int = None,
     print(f"\n{'=' * 60}")
     print(f"✅ 分析完成！总耗时: {elapsed:.1f} 秒")
     for src, path in report_paths.items():
-        src_name = {"guba": "股吧", "xueqiu": "雪球"}.get(src, src)
+        src_name = {"guba": "股吧", "xueqiu": "雪球", "compare": "对比"}.get(src, src)
         print(f"📄 {src_name}报告: {path}")
     print(f"{'=' * 60}")
 
@@ -532,30 +575,162 @@ def generate_reports_only(date_str: str = None, skip_guba: bool = False, skip_xu
             wl_metrics.append(metrics)
         data["watchlist_metrics"] = wl_metrics
 
+    def _recalculate_cycle_stages(data, source):
+        """用当前阈值重新计算所有周期阶段"""
+        from storage.data_store import load_history, load_watchlist_history
+        history = load_history(source)
+        # 个股
+        for m in data.get("stock_metrics", []):
+            wl_hist = load_watchlist_history(m.get("stock_code", ""), source=source) if m.get("stock_code") else None
+            m["cycle_stage"] = determine_cycle_stage(m, history=wl_hist)
+        # 自选股
+        for m in data.get("watchlist_metrics", []):
+            wl_hist = load_watchlist_history(m.get("stock_code", ""), source=source) if m.get("stock_code") else None
+            m["cycle_stage"] = determine_cycle_stage(m, history=wl_hist)
+        # 市场概览
+        overview = data.get("overview", {})
+        overview["cycle_stage"] = determine_cycle_stage(overview, history=history)
+
+    def _recalculate_heat_scores(data, source):
+        """用当前公式重新计算热度（参数变更后需重算）"""
+        import math
+        from config.settings import (
+            XUEQIU_HEAT_INTERACTION_WEIGHT, XUEQIU_HEAT_FOLLOW_WEIGHT,
+            XUEQIU_HEAT_INTERACTION_BASE, XUEQIU_HEAT_FOLLOW_BASE,
+            GUBA_RANK_MAX,
+        )
+        if source == "xueqiu":
+            for m in data.get("stock_metrics", []) + data.get("watchlist_metrics", []):
+                ti = m.get("total_interactions", 0)
+                fc = m.get("follow_count", 0)
+                if ti > 0:
+                    iscore = min(XUEQIU_HEAT_INTERACTION_WEIGHT,
+                        math.log10(max(1, ti)) / math.log10(XUEQIU_HEAT_INTERACTION_BASE) * XUEQIU_HEAT_INTERACTION_WEIGHT)
+                else:
+                    iscore = 0
+                if fc > 0:
+                    fscore = min(XUEQIU_HEAT_FOLLOW_WEIGHT,
+                        math.log10(max(1, fc)) / math.log10(XUEQIU_HEAT_FOLLOW_BASE) * XUEQIU_HEAT_FOLLOW_WEIGHT)
+                else:
+                    fscore = 0
+                m["heat_score"] = round(iscore + fscore, 2)
+        elif source == "guba":
+            for m in data.get("stock_metrics", []) + data.get("watchlist_metrics", []):
+                rank = m.get("guba_rank") or 0
+                if rank > 0:
+                    m["heat_score"] = round(max(0, (1 - (rank - 1) ** 0.3 / GUBA_RANK_MAX ** 0.3) * 100), 2)
+                else:
+                    # 旧数据没有 guba_rank，从旧热度反推排名再算新热度
+                    old_heat = m.get("heat_score", 0)
+                    if old_heat > 0 and old_heat <= 100:
+                        old_ratio = old_heat / 100.0
+                        if old_ratio < 1.0:
+                            rank = max(1, round(10 ** ((1 - old_ratio) * math.log10(GUBA_RANK_MAX))))
+                        else:
+                            rank = 1
+                        m["guba_rank"] = rank
+                        m["heat_score"] = round(max(0, (1 - (rank - 1) ** 0.3 / GUBA_RANK_MAX ** 0.3) * 100), 2)
+        # 重算整体热度
+        overview = data.get("overview", {})
+        stocks = data.get("stock_metrics", [])
+        if stocks:
+            overview["overall_heat"] = round(sum(m["heat_score"] for m in stocks) / len(stocks), 1)
+
+    def _fill_watchlist_prices(guba_data, xq_data):
+        """从雪球数据、热门股数据、东方财富API补充自选股缺失的股价和涨跌幅"""
+        xq_prices = {}
+        if xq_data:
+            for m in xq_data.get("watchlist_metrics", []):
+                code = m.get("stock_code", "")
+                if m.get("stock_price", 0) > 0:
+                    xq_prices[code] = (m.get("stock_price", 0), m.get("change_percent", 0))
+
+        hot_prices = {}
+        for m in guba_data.get("stock_metrics", []):
+            code = str(m.get("stock_code", "")).replace("SH", "").replace("SZ", "")
+            price = m.get("price", 0) or m.get("stock_price", 0)
+            if price > 0:
+                hot_prices[code] = (price, m.get("change_percent", 0))
+
+        missing_codes = []
+        for m in guba_data.get("watchlist_metrics", []):
+            code = m.get("stock_code", "")
+            if m.get("stock_price", 0) == 0 and code not in xq_prices and code not in hot_prices:
+                missing_codes.append(code)
+
+        api_prices = {}
+        if missing_codes:
+            from collectors.price_fetcher import fetch_stock_prices
+            api_prices = fetch_stock_prices(missing_codes)
+
+        filled = 0
+        for m in guba_data.get("watchlist_metrics", []):
+            code = m.get("stock_code", "")
+            if m.get("stock_price", 0) == 0:
+                if code in xq_prices:
+                    m["stock_price"], m["change_percent"] = xq_prices[code]
+                    filled += 1
+                elif code in hot_prices:
+                    m["stock_price"], m["change_percent"] = hot_prices[code]
+                    filled += 1
+                elif code in api_prices:
+                    m["stock_price"], m["change_percent"] = api_prices[code]
+                    filled += 1
+        if filled:
+            print(f"  📊 补充了 {filled} 只自选股的股价信息")
+        save_daily_data(guba_data, date_str=date_str, source="guba")
+
     if not skip_guba:
         guba_data = load_daily_data(date_str, source="guba")
-        if guba_data:
-            _ensure_watchlist(guba_data, "guba")
-            save_history_snapshot(guba_data, source="guba")
-            report_paths["guba"] = generate_report(guba_data, data_source="guba")
-            print(f"  ✓ 股吧报告: {report_paths['guba']}")
-        else:
-            print(f"  ✗ 未找到股吧数据: guba_data_{date_str}.json")
-
+    else:
+        guba_data = None
     if not skip_xueqiu:
         xq_data = load_daily_data(date_str, source="xueqiu")
-        if xq_data:
-            _ensure_watchlist(xq_data, "xueqiu")
-            save_history_snapshot(xq_data, source="xueqiu")
-            report_paths["xueqiu"] = generate_report(xq_data, data_source="xueqiu")
-            print(f"  ✓ 雪球报告: {report_paths['xueqiu']}")
-        else:
-            print(f"  ✗ 未找到雪球数据: xueqiu_data_{date_str}.json")
+    else:
+        xq_data = None
+
+    if guba_data:
+        _ensure_watchlist(guba_data, "guba")
+        _fill_watchlist_prices(guba_data, xq_data)
+        _recalculate_heat_scores(guba_data, "guba")
+        _recalculate_cycle_stages(guba_data, "guba")
+        date_iso = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+        market_heat = get_market_heat_by_date(date_iso)
+        if market_heat and market_heat.get("uv_index", 0) > 0:
+            from collectors.market_heat import uv_to_heat_score
+            heat_score = uv_to_heat_score(market_heat["uv_index"])
+            guba_data["overview"]["overall_heat"] = heat_score
+            guba_data["overview"]["heat_is_provisional"] = market_heat.get("is_provisional", False)
+            guba_data["overview"]["heat_source"] = market_heat.get("source", "external")
+            guba_data["overview"]["heat_uv_index"] = market_heat.get("uv_index", 0)
+            tag = " (临时)" if market_heat.get("is_provisional") else ""
+            print(f"  📈 大盘热度: {heat_score:.1f}分 (UV={market_heat['uv_index']:.0f}万){tag}")
+        save_history_snapshot(guba_data, source="guba")
+        report_paths["guba"] = generate_report(guba_data, data_source="guba")
+        print(f"  ✓ 股吧报告: {report_paths['guba']}")
+    else:
+        print(f"  ✗ 未找到股吧数据: guba_data_{date_str}.json")
+
+    if xq_data:
+        _ensure_watchlist(xq_data, "xueqiu")
+        _recalculate_heat_scores(xq_data, "xueqiu")
+        _recalculate_cycle_stages(xq_data, "xueqiu")
+        save_history_snapshot(xq_data, source="xueqiu")
+        report_paths["xueqiu"] = generate_report(xq_data, data_source="xueqiu")
+        print(f"  ✓ 雪球报告: {report_paths['xueqiu']}")
+    else:
+        print(f"  ✗ 未找到雪球数据: xueqiu_data_{date_str}.json")
+
+    # 生成自选股对比报告
+    if guba_data and xq_data:
+        from report.report_generator import generate_watchlist_compare_report
+        report_paths["compare"] = generate_watchlist_compare_report(guba_data, xq_data)
+        print(f"  ✓ 对比报告: {report_paths['compare']}")
 
     print(f"\n{'=' * 60}")
     print(f"✅ 报告生成完成！")
     for src, path in report_paths.items():
-        src_name = {"guba": "股吧", "xueqiu": "雪球"}.get(src, src)
+        src_name = {"guba": "股吧", "xueqiu": "雪球", "compare": "对比"}.get(src, src)
         print(f"📄 {src_name}报告: {path}")
     print(f"{'=' * 60}")
 
