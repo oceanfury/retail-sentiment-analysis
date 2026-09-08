@@ -436,9 +436,17 @@
                 <div class="watchlist-body" id="watchlist-body-{{ loop.index }}"
                      style="display:none;padding:16px;border-top:1px solid #e8e8e8;">
                     <p style="font-size:13px;color:#666;margin-bottom:12px;">{{ w.cycle_signal }}</p>
-                    <p style="font-size:12px;color:#999;margin-bottom:8px;">
-                        帖子来源：股吧 {{ w.guba_posts }} 条 | 雪球 {{ w.xueqiu_posts }} 条 |
-                        看多 {{ w.positive_count }} | 看空 {{ w.negative_count }} | 中性 {{ w.neutral_count }}
+                    <p style="margin-bottom:8px;">
+                        {% set pure_code = w.stock_code|replace('SH','')|replace('SZ','')|replace('BJ','') %}
+                        {% if data_source == 'guba' %}
+                        <a href="https://guba.eastmoney.com/list,{{ pure_code }}.html" target="_blank" style="font-size:13px;color:#1890ff;text-decoration:none;">📋 查看股吧讨论 →</a>
+                        {% elif data_source == 'xueqiu' %}
+                        {% if pure_code[:1] == '6' %}
+                        <a href="https://xueqiu.com/S/SH{{ pure_code }}" target="_blank" style="font-size:13px;color:#1890ff;text-decoration:none;">🌐 查看雪球讨论 →</a>
+                        {% else %}
+                        <a href="https://xueqiu.com/S/SZ{{ pure_code }}" target="_blank" style="font-size:13px;color:#1890ff;text-decoration:none;">🌐 查看雪球讨论 →</a>
+                        {% endif %}
+                        {% endif %}
                     </p>
                     <div id="watchlistChart-{{ loop.index }}" style="width:100%;height:300px;"></div>
                 </div>
@@ -452,11 +460,11 @@
             <div class="section-title">📋 数据说明</div>
             <div style="font-size: 13px; color: #666; line-height: 1.8;">
                 <p><strong>数据来源：</strong>{{ sources }}</p>
-                <p><strong>情绪分析方法：</strong>基于金融领域情感词典的规则法情绪分析，综合考虑否定词、程度词修饰</p>
-                <p><strong>情绪指数：</strong>0-100，50为中性，越高越乐观，加权考虑帖子互动量</p>
-                <p><strong>热度评分：</strong>0-100，综合帖子数量和互动量计算</p>
+                <p><strong>情绪分析方法：</strong>{% if data_source == 'xueqiu' %}雪球热门股采用词典规则法（否定词+程度词修饰），自选股采用 Deepseek 大模型分类（看多/看空/中性），互动量加权计算情绪指数{% elif data_source == 'guba' %}股吧热门股采用词典规则法（否定词+程度词修饰），自选股采用 Deepseek 大模型分类（看多/看空/中性），简单算术平均计算情绪指数{% else %}基于金融领域情感词典的规则法情绪分析，综合考虑否定词、程度词修饰{% endif %}</p>
+                <p><strong>情绪指数：</strong>0-100，50为中性，越高越乐观{% if data_source == 'xueqiu' %}，互动量加权{% elif data_source == 'guba' %}，每帖一票不加权{% endif %}</p>
+                <p><strong>热度评分：</strong>0-100，{% if data_source == 'xueqiu' %}基于互动量(70%)+关注量(30%)对数加权{% elif data_source == 'guba' %}基于人气排名幂函数计算{% else %}综合帖子数量和互动量计算{% endif %}</p>
                 <p><strong>分歧度：</strong>0-100%，越高表示多空分歧越大</p>
-                <p><strong>周期阶段：</strong>🌱启动期 → 🚀加速期 → 🔥高潮期 → 📉退潮期 → ❄️冰点期</p>
+                <p><strong>周期阶段：</strong>❄️冰点期(情绪&lt;30) → 🥶低迷期(情绪&lt;45且热度&lt;25) → 🌱蓄势期(中性且分歧大) → 📊震荡期 → 🧊存量期(情绪偏多但热度低) → 🚀加速期(情绪偏多↑热度↑) → 📊活跃期(偏多且活跃) → 📉退热期(偏多但下降) → 😨恐慌期(偏空但讨论激烈) → 🔥过热期(情绪&gt;70且热度&gt;75) → ⚔️分歧期(多空分歧极大)</p>
                 <p style="color: #999; margin-top: 8px;">
                     ⚠️ 免责声明：本报告仅为散户情绪数据分析，不构成任何投资建议。股市有风险，投资需谨慎。
                 </p>
