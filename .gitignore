@@ -41,5 +41,9 @@ logs/
 *.bak
 *.temp
 
+# 配置文件（含敏感信息，提交示例文件）
+config/settings.py
+config/watchlist.json
+
 # 测试文件
 _check*.py
