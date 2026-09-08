@@ -1,6 +1,6 @@
 # 散户情绪分析系统 — 详细设计文档
 
-> **版本**：v1.2 | **更新日期**：2026-09-04 | **适用项目**：Retail\_sentiment
+> **版本**：v1.4 | **更新日期**：2026-09-07 | **适用项目**：Retail\_sentiment
 
 ***
 
@@ -19,6 +19,7 @@
 11. [历史趋势模块](#11-历史趋势模块)
 12. [配置参数速查](#12-配置参数速查)
 13. [阈值与常量速查](#13-阈值与常量速查)
+14. [定时执行模块](#14-定时执行模块)
 
 ***
 
@@ -51,15 +52,21 @@
 ```
 Retail_sentiment/
 ├── main.py                     # 主入口，编排全流程
+├── run_daily.ps1                # 定时运行脚本（交易日历判断 + 日志记录）
+├── manage_schedule.ps1          # 计划任务管理（创建/删除/查看/测试）
 ├── config/
-│   ├── settings.py             # 全局配置（路径、数量、延迟、Cookie）
-│   ├── watchlist.json          # 自选股配置
+│   ├── settings.py             # 全局配置（路径、数量、延迟、Cookie，gitignore）
+│   ├── settings_sample.py      # 配置示例文件（复制为settings.py后填写）
+│   ├── watchlist.json          # 自选股配置（gitignore）
+│   ├── watchlist_sample.json   # 自选股示例文件（复制为watchlist.json后修改）
+│   ├── holidays.json           # A股休市日配置（节假日 + 调休补班日）
 │   └── sentiment_dict.json     # 情感词典
 ├── collectors/
 │   ├── hot_stocks.py           # 热门股票列表获取（股吧人气榜）
 │   ├── guba_crawler.py         # 股吧帖子采集
 │   ├── xueqiu_crawler.py       # 雪球帖子采集
-│   └── market_heat.py          # 东方财富APP UV指数采集
+│   ├── market_heat.py          # 东方财富APP UV指数采集
+│   └── price_fetcher.py        # 腾讯财经API股价获取（补充缺失股价）
 ├── analysis/
 │   ├── sentiment.py            # 情绪分析引擎（词典法，热门股用）
 │   ├── llm_sentiment.py        # Deepseek 大模型情绪分析（自选股用）
@@ -73,6 +80,7 @@ Retail_sentiment/
 │       ├── report.html         # 单平台 Jinja2 HTML 模板
 │       └── watchlist_compare.html  # 自选股对比报告模板
 ├── browsers/                   # Playwright Chromium（平台相关）
+├── logs/                        # 定时任务日志（schedule_YYYYMMDD.log）
 └── data/
     ├── raw/                    # 原始数据 + 聚合数据 + 历史
     └── reports/                # 生成的 HTML 报告
@@ -82,7 +90,7 @@ Retail_sentiment/
 
 | 层       | 技术                                              |
 | ------- | ----------------------------------------------- |
-| 数据采集    | Playwright（无头 Chromium）+ curl\_cffi（东方财富行情 API） |
+| 数据采集    | Playwright（无头 Chromium）+ curl\_cffi（东方财富行情 API）+ 腾讯财经API（股价补充） |
 | HTML 解析 | BeautifulSoup4 + lxml                           |
 | 情绪分析    | 热门股：自建情感词典 + 规则匹配；自选股：Deepseek 大模型（批量并发）        |
 | 指标计算    | 纯 Python 加权/简单平均 + 对数缩放                         |
@@ -164,6 +172,9 @@ python main.py --report-only
 
 # 重跑某天的报告
 python main.py --report-only --date 20260903
+
+# 重新用LLM分析旧自选股帖子（修复旧词典法数据后重新生成报告）
+python reanalyze_wl.py 20260903
 ```
 
 ***
@@ -302,6 +313,20 @@ python main.py --report-only --date 20260903
 2. 按 `post_id` → `url` → `stock_code + title + publish_time` 三级去重
 3. 追加新帖子后重新保存
 4. 四路独立：`guba`、`xueqiu`、`guba_wl`（自选股）、`xueqiu_wl`（自选股）
+
+### 4.6 股价补充机制（`price_fetcher.py`）
+
+自选股帖子采集时可能缺失股价信息（如该股在采集平台无热门帖数据）。系统通过三级 fallback 补充：
+
+| 优先级 | 来源 | 说明 |
+| --- | --- | --- |
+| 1 | 雪球自选股数据 | 从同日雪球采集的 `watchlist_metrics` 中取 `stock_price` |
+| 2 | 股吧热门股数据 | 从同日热门股 `stock_metrics` 中按代码匹配 `price` 字段 |
+| 3 | 腾讯财经API | 调用 `https://qt.gtimg.cn/q={prefix}{code}` 实时获取 |
+
+补充后通过 `save_daily_data()` 持久化到聚合 JSON，后续 `--report-only` 无需再次补充。
+
+> 热门股表格已增加「股价」列，直接显示 `price` 字段。
 
 ***
 
@@ -805,7 +830,7 @@ sentiment, score, confidence, url
 | 市场概览卡片  | 情绪指数、讨论热度、看多/看空/中性数、置信度        |
 | 周期状态卡片  | 当前阶段名称、emoji、信号描述、三维状态明细       |
 | 趋势图     | ECharts 三线图：情绪指数/热度指数/分歧度 × 日期 |
-| 热门个股情绪榜 | 全部 N 只股票，按情绪排序，含多/空/中帖子数、阶段标签  |
+| 热门个股情绪榜 | 全部 N 只股票，按情绪排序，含股价、涨跌幅、多/空/中帖子数、阶段标签  |
 | 自选股情绪分析 | 自选股列表 + 股价/涨跌幅/情绪/热度/多空分布/趋势图  |
 
 ### 9.3 双平台报告差异
@@ -1026,7 +1051,7 @@ trend < -0.05 → ↓
 | like\_count    | × 1.5   | metrics.py  | 互动量权重  |
 | 单帖权重上限         | 总权重 10% | metrics.py  | 防止单帖主导 |
 | 雪球互动量基准        | 2000    | metrics.py  | 热度满分基准 |
-| 雪球关注量基准        | 100000  | metrics.py  | 热度满分基准 |
+| 雪球关注量基准        | 500000  | metrics.py  | 热度满分基准 |
 | 股吧排名基准         | 5500    | settings.py | 热度对数基准 |
 
 ### 13.3 周期模型阈值
@@ -1069,6 +1094,74 @@ trend < -0.05 → ↓
 | 原始帖子    | 不自动清理 | _raw\_posts_.json                         |
 | CSV 导出  | 不自动清理 | _posts_.csv                               |
 | HTML 报告 | 不自动清理 | _report_.html                             |
+
+***
+
+## 14. 定时执行模块
+
+### 14.1 架构设计
+
+系统通过 **Windows 任务计划程序 + PowerShell 脚本** 实现自动定时运行，无需常驻 Python 进程。
+
+| 组件 | 文件 | 说明 |
+| --- | --- | --- |
+| 运行脚本 | `run_daily.ps1` | 交易日历判断 + 调用 `main.py` + 日志记录 |
+| 任务管理 | `manage_schedule.ps1` | 创建/删除/查看/测试 Windows 计划任务 |
+| 休市日配置 | `config/holidays.json` | 节假日 + 调休补班日，每年手动更新 |
+
+### 14.2 每日执行计划
+
+| 时间 | 任务名 | 模式 | 说明 |
+| --- | --- | --- | --- |
+| 12:00 | RetailSentiment\_CollectMidday | `--collect-only` | 午盘采集帖子（增量合并） |
+| 15:30 | RetailSentiment\_CollectClose | `--collect-only` | 收盘采集帖子（增量合并） |
+| 16:00 | RetailSentiment\_Report | `--report-only` | 生成三份日报（股吧/雪球/对比） |
+
+> 一天内两次 `--collect-only` 利用增量合并机制，采集到更多盘中和尾盘帖子。也可简化为单次全量运行 `python main.py`。
+
+### 14.3 交易日历判断逻辑
+
+```
+1. 检查当前日期是否在 workdays 列表（调休补班日）→ 是 → 交易日
+2. 检查是否为周六/周日 → 是 → 非交易日
+3. 检查是否在 holidays 列表（法定节假日）→ 是 → 非交易日
+4. 否则 → 交易日
+```
+
+### 14.4 holidays.json 结构
+
+```json
+{
+  "holidays": {
+    "2026": ["2026-01-01", "2026-02-16", ...]
+  },
+  "workdays": {
+    "2026": ["2026-02-14", "2026-04-26", ...]
+  }
+}
+```
+
+- `holidays`：休市日（含工作日节假日，不含周末——周末自动跳过）
+- `workdays`：调休补班日（周末但开市，优先级最高）
+
+### 14.5 日志
+
+日志文件按日期存储在 `logs/` 目录：
+
+| 文件 | 说明 |
+| --- | --- |
+| `schedule_YYYYMMDD.log` | 主日志（启动/跳过/成功/失败/耗时） |
+| `stdout_YYYYMMDD.log` | Python 标准输出 |
+| `stderr_YYYYMMDD.log` | Python 错误输出 |
+
+### 14.6 管理命令
+
+```powershell
+.\manage_schedule.ps1 -Action create   # 创建3个计划任务（需管理员权限）
+.\manage_schedule.ps1 -Action delete   # 删除全部任务
+.\manage_schedule.ps1 -Action status   # 查看任务状态和下次运行时间
+.\manage_schedule.ps1 -Action test     # 立即测试运行
+```
 
 ***
 

@@ -94,6 +94,23 @@ def get_hot_stocks_from_gainers(count: int = None) -> List[Dict]:
 
         browser.close()
 
+    # 补充缺失的股票名称和价格（页面JS动态加载，初始HTML可能为空）
+    missing = [s["symbol"] for s in all_stocks if not s.get("name") or not s.get("price")]
+    if missing:
+        print(f"  📡 从API补充 {len(missing)} 只股票的名称和价格...")
+        api_data = _fetch_stock_info_batch(missing)
+        for s in all_stocks:
+            info = api_data.get(s["symbol"])
+            if info:
+                if not s.get("name"):
+                    s["name"] = info["name"]
+                if not s.get("price"):
+                    s["price"] = info["price"]
+                if not s.get("change_percent"):
+                    s["change_percent"] = info["change_percent"]
+        filled = sum(1 for s in all_stocks if s.get("name"))
+        print(f"  ✓ 名称补充完成: {filled}/{len(all_stocks)}")
+
     print(f"  ✓ 获取股吧人气榜 TOP{len(all_stocks)}")
     return all_stocks
 
@@ -120,7 +137,7 @@ def _parse_rank_table(html: str) -> List[Dict]:
             if not symbol or not symbol[0].isdigit():
                 continue
 
-            # 列4: 股票名称
+            # 列4: 股票名称（JS动态填充，可能为空）
             name_cell = cells[4]
             name = name_cell.get_text(separator="", strip=True)
             name = name.split("#")[0].split("讨论")[0].strip()
@@ -156,6 +173,57 @@ def _parse_rank_table(html: str) -> List[Dict]:
             continue
 
     return stocks
+
+
+def _fetch_stock_info_batch(symbols: List[str]) -> Dict:
+    """通过腾讯财经API批量获取股票名称、价格、涨跌幅"""
+    if not symbols:
+        return {}
+
+    try:
+        import requests as req
+    except ImportError:
+        return {}
+
+    result = {}
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    for symbol in symbols:
+        if symbol.startswith("6") or symbol.startswith("9") or symbol.startswith("5"):
+            prefix = "sh"
+        else:
+            prefix = "sz"
+
+        try:
+            url = f"https://qt.gtimg.cn/q={prefix}{symbol}"
+            resp = req.get(url, headers=headers, timeout=5)
+            text = resp.text
+
+            import re
+            match = re.search(r'"(.+?)"', text)
+            if not match:
+                result[symbol] = {"name": "", "price": 0.0, "change_percent": 0.0}
+                continue
+
+            fields = match.group(1).split("~")
+            if len(fields) < 35:
+                result[symbol] = {"name": "", "price": 0.0, "change_percent": 0.0}
+                continue
+
+            name = fields[1]
+            price = float(fields[3]) if fields[3] else 0
+            change_percent = float(fields[32]) if fields[32] else 0
+
+            result[symbol] = {
+                "name": name if name else "",
+                "price": round(price, 2) if price else 0.0,
+                "change_percent": round(change_percent, 2) if change_percent else 0.0,
+            }
+            time.sleep(0.05)
+        except Exception:
+            result[symbol] = {"name": "", "price": 0.0, "change_percent": 0.0}
+
+    return result
 
 
 def _safe_float(s: str) -> float:

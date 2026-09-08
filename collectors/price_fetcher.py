@@ -56,8 +56,8 @@ def fetch_stock_prices(codes: list) -> Dict[str, Tuple[float, float]]:
             name = fields[1]
             current_price = float(fields[3]) if fields[3] else 0
             yesterday_close = float(fields[4]) if fields[4] else 0
-            change_amount = float(fields[32]) if fields[32] else 0
-            change_percent = float(fields[33]) if fields[33] else 0
+            change_amount = float(fields[31]) if fields[31] else 0
+            change_percent = float(fields[32]) if fields[32] else 0
 
             if current_price > 0:
                 results[clean_code] = (round(current_price, 2), round(change_percent, 2))

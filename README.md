@@ -16,7 +16,7 @@
 
   - 股吧：个股热度 = 人气排名对数缩放；整体热度 = 东方财富APP UV指数归一化（数据来源 apppc.com，滞后约6天，临时值自动回填）
 
-  - 雪球：互动量 50% + 关注量 50%（对数缩放，保留区分度）
+  - 雪球：互动量 70% + 关注量 30%（对数缩放，互动量基准2000，关注量基准500000）
 
 - 🚫 **媒体/公告过滤**：雪球自动剔除证券日报、新浪财经等媒体账号及上市公司官方公告号
 
@@ -34,23 +34,32 @@
 
 - ➕ **增量采集**：支持一天内多次运行，帖子自动去重合并
 
+- ⏰ **定时自动运行**：Windows 计划任务 + 交易日历判断，自动跳过周末和节假日，每天 3 次自动采集和生成报告
+
 ## 项目结构
 
 ```
 Retail_sentiment/
 ├── main.py                  # 主入口
+├── reanalyze_wl.py          # 重新用LLM分析旧自选股帖子（修复旧词典法数据）
+├── run_daily.ps1            # 定时运行脚本（含交易日历判断）
+├── manage_schedule.ps1      # 计划任务管理（创建/删除/查看/测试）
 ├── test_demo.py             # 模拟数据测试
 ├── requirements.txt         # 依赖列表
 ├── XUEQIU_SETUP.md          # 雪球配置说明
 ├── config/
-│   ├── settings.py          # 全局配置
-│   ├── watchlist.json       # 自选股配置
+│   ├── settings.py          # 全局配置（gitignore，含API Key等敏感信息）
+│   ├── settings_sample.py   # 配置示例文件（复制为settings.py后填写）
+│   ├── watchlist.json       # 自选股配置（gitignore）
+│   ├── watchlist_sample.json # 自选股示例文件（复制为watchlist.json后修改）
+│   ├── holidays.json        # A股休市日配置（节假日+调休补班日）
 │   └── sentiment_dict.json  # 情感词典
 ├── collectors/
 │   ├── hot_stocks.py        # 热门股票列表获取
 │   ├── guba_crawler.py      # 东方财富股吧爬虫
 │   ├── xueqiu_crawler.py    # 雪球爬虫
-│   └── market_heat.py       # 东方财富APP UV指数采集
+│   ├── market_heat.py       # 东方财富APP UV指数采集
+│   └── price_fetcher.py     # 腾讯财经API股价获取（补充缺失股价）
 ├── analysis/
 │   ├── sentiment.py         # 情绪分析引擎（词典法，热门股用）
 │   ├── llm_sentiment.py     # Deepseek 大模型情绪分析（自选股用）
@@ -64,6 +73,7 @@ Retail_sentiment/
 │       ├── report.html      # 单平台报告模板
 │       └── watchlist_compare.html  # 自选股对比报告模板
 ├── browsers/                # Playwright 浏览器（自动安装，平台相关）
+├── logs/                    # 定时任务日志（schedule_YYYYMMDD.log）
 └── data/
     ├── raw/                 # 原始数据（JSON/CSV）
     └── reports/             # 生成的报告（HTML）
@@ -119,6 +129,14 @@ playwright install chromium
 
 ### 配置 Deepseek API Key
 
+`config/settings.py` 和 `config/watchlist.json` 已加入 `.gitignore`（含敏感信息）。项目提供示例文件：
+
+```bash
+# 复制示例文件为正式配置
+cp config/settings_sample.py config/settings.py
+cp config/watchlist_sample.json config/watchlist.json
+```
+
 在 `config/settings.py` 中设置 Deepseek API Key（用于自选股情绪分析和对比报告生成）：
 
 ```python
@@ -172,6 +190,56 @@ python main.py --report-only --date 20260903
 python test_demo.py
 ```
 
+## 定时自动运行
+
+系统支持通过 Windows 计划任务实现全自动运行，包含交易日历判断（自动跳过周末和节假日）。
+
+### 快速设置
+
+```powershell
+# 1. 创建全部定时任务（需管理员权限）
+.\manage_schedule.ps1 -Action create
+
+# 2. 查看任务状态
+.\manage_schedule.ps1 -Action status
+
+# 3. 立即测试运行一次
+.\manage_schedule.ps1 -Action test
+
+# 4. 删除全部定时任务
+.\manage_schedule.ps1 -Action delete
+```
+
+### 每日执行计划
+
+| 时间 | 任务 | 模式 | 说明 |
+|------|------|------|------|
+| 12:00 | RetailSentiment_CollectMidday | collect | 午盘采集帖子（增量合并） |
+| 15:30 | RetailSentiment_CollectClose | collect | 收盘采集帖子（增量合并） |
+| 16:00 | RetailSentiment_Report | report | 生成三份日报 |
+
+### 交易日历
+
+`config/holidays.json` 存储 A 股休市日配置：
+
+- `holidays`：法定节假日（周末休市日 + 工作日节假日）
+- `workdays`：调休补班日（周末但开市）
+
+> 每年根据国务院发布的放假通知更新此文件。脚本会自动跳过非交易日，日志记录到 `logs/schedule_YYYYMMDD.log`。
+
+### 手动运行定时脚本
+
+```powershell
+# 手动执行采集
+.\run_daily.ps1 -Mode collect
+
+# 手动执行报告生成
+.\run_daily.ps1 -Mode report
+
+# 手动全量运行
+.\run_daily.ps1 -Mode full
+```
+
 ## 配置说明
 
 主要配置在 `config/settings.py` 中：
@@ -181,7 +249,7 @@ python test_demo.py
 | HOT\_STOCKS\_COUNT     | 20  | 监控的热门股票数量          |
 | GUBA\_PAGE\_COUNT      | 5   | 每只股票抓取股吧页数         |
 | GUBA\_REQUEST\_DELAY   | 1.5 | 股吧请求间隔（秒）          |
-| XUEQIU\_POST\_COUNT    | 10  | 每只股票抓取雪球帖子数（API限制） |
+| XUEQIU\_POST\_COUNT    | 50  | 每只股票抓取雪球帖子数 |
 | XUEQIU\_REQUEST\_DELAY | 2.5 | 雪球请求间隔（秒）          |
 | MARKET\_HEAT\_UV\_LOW  | 5000.0 | UV指数下限（=0分）       |
 | MARKET\_HEAT\_UV\_HIGH | 9000.0 | UV指数上限（=100分）     |
@@ -213,7 +281,7 @@ python test_demo.py
 
 - 情绪分布
 
-- 热门个股情绪榜（完整榜单，含涨跌幅、情绪、热度、分歧度、多空比、周期阶段）
+- 热门个股情绪榜（完整榜单，含股价、涨跌幅、情绪、热度、分歧度、多空比、周期阶段）
 
 - 自选股情绪分析（可展开查看历史趋势图）
 
