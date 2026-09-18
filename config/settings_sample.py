@@ -97,3 +97,10 @@ LLM_BATCH_SIZE = 20          # 每批分析帖子数
 LLM_MAX_RETRIES = 3           # 最大重试次数
 LLM_REQUEST_DELAY = 0.5       # 请求间隔（秒）
 LLM_CONCURRENCY = 3           # 并发线程数
+LLM_MAX_TOKENS = 4000         # 单次响应上限（含思维链）
+# 推理模型(如 deepseek-flash)的思维链会计入 max_tokens，可能挤掉正文，
+# 情绪分类用不上思维链，默认关闭；若换成非推理模型此参数会被忽略
+LLM_DISABLE_THINKING = True
+LLM_MIN_BATCH_SIZE = 5        # 输出截断时拆批的下限，低于此不再拆
+LLM_MAX_SPLIT_DEPTH = 2       # 拆批最大递归层数
+LLM_TIMEOUT = 120             # 单次请求超时（秒）

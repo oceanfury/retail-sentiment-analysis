@@ -13,6 +13,18 @@ from config.settings import REPORT_DIR
 from storage.data_store import load_history, load_watchlist_history
 
 
+def _safe_overview(data: Dict) -> Dict:
+    """
+    取市场概览并补齐模板必需字段。
+
+    overview["cycle_stage"] 只在内存里被 main.py 的重算逻辑写入，未落盘，
+    缺失时模板访问 .cycle_stage.stage_emoji 会直接抛错导致整份报告生成失败。
+    """
+    overview = dict(data.get("overview", {}))
+    overview.setdefault("cycle_stage", {})
+    return overview
+
+
 def generate_report(data: Dict, output_path: str = None, data_source: str = None) -> str:
     """
     生成 HTML 日报
@@ -350,8 +362,8 @@ def generate_watchlist_compare_report(guba_data: Dict, xueqiu_data: Dict, output
 
     html = template.render(
         date=date_str, generated_at=generated_at,
-        guba_overview=guba_data.get("overview", {}),
-        xueqiu_overview=xueqiu_data.get("overview", {}),
+        guba_overview=_safe_overview(guba_data),
+        xueqiu_overview=_safe_overview(xueqiu_data),
         comparison=comparison, suggestions=suggestions, insights=insights,
         market_summary=market_summary,
     )

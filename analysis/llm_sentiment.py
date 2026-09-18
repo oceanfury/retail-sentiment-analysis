@@ -10,15 +10,33 @@ from typing import List, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent.parent))
+from config import settings as _settings
 from config.settings import (
     DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_MODEL,
     LLM_BATCH_SIZE, LLM_MAX_RETRIES, LLM_REQUEST_DELAY, LLM_CONCURRENCY,
 )
 
+# 新增配置项用 getattr 兜底，兼容未更新的本地 settings.py
+LLM_MAX_TOKENS = getattr(_settings, "LLM_MAX_TOKENS", 4000)
+LLM_DISABLE_THINKING = getattr(_settings, "LLM_DISABLE_THINKING", True)
+LLM_MIN_BATCH_SIZE = getattr(_settings, "LLM_MIN_BATCH_SIZE", 5)
+LLM_MAX_SPLIT_DEPTH = getattr(_settings, "LLM_MAX_SPLIT_DEPTH", 2)
+LLM_TIMEOUT = getattr(_settings, "LLM_TIMEOUT", 120)
+
 try:
     import requests
 except ImportError:
     requests = None
+
+
+class TruncatedResponse(RuntimeError):
+    """模型输出被 max_tokens 截断（推理模型的思维链会占用同一份额度）"""
+    pass
+
+
+class EmptyResponse(RuntimeError):
+    """模型返回了空正文"""
+    pass
 
 
 def _build_prompt(posts: List[Dict]) -> str:
@@ -70,42 +88,112 @@ def _call_deepseek(prompt: str) -> str:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.1,
-        "max_tokens": 2000,
+        "max_tokens": LLM_MAX_TOKENS,
         "response_format": {"type": "json_object"},
     }
 
+    # deepseek-flash 等推理模型会把思维链(reasoning_content)计入 max_tokens，
+    # 情绪分类不需要思维链，却可能被它吃光额度导致正文为空/半截。
+    if LLM_DISABLE_THINKING:
+        payload["thinking"] = {"type": "disabled"}
+
     resp = requests.post(
-        DEEPSEEK_API_URL, headers=headers, json=payload, timeout=30
+        DEEPSEEK_API_URL, headers=headers, json=payload, timeout=LLM_TIMEOUT
     )
     resp.raise_for_status()
     data = resp.json()
-    return data["choices"][0]["message"]["content"]
+
+    choice = data["choices"][0]
+    content = (choice.get("message") or {}).get("content") or ""
+
+    # 截断必须显式报错：否则半截 JSON 会被当成"全中性"，静默污染结果
+    if choice.get("finish_reason") == "length":
+        reasoning = (data.get("usage", {}).get("completion_tokens_details") or {}).get(
+            "reasoning_tokens"
+        )
+        detail = f"，其中思维链 {reasoning} tokens" if reasoning else ""
+        raise TruncatedResponse(f"输出被 max_tokens={LLM_MAX_TOKENS} 截断{detail}")
+
+    if not content.strip():
+        raise EmptyResponse("模型返回空正文")
+
+    return content
+
+
+def _looks_like_results(obj) -> bool:
+    """判断是否为情绪结果列表：非空、元素是 dict、且带情绪字段"""
+    if not isinstance(obj, list) or not obj:
+        return False
+    dicts = [x for x in obj if isinstance(x, dict)]
+    if not dicts:
+        return False
+    return any(("sentiment" in x or "label" in x) for x in dicts)
+
+
+def _collect_candidates(obj, out: List[List[Dict]]) -> None:
+    """递归收集所有可能是结果列表的候选"""
+    if _looks_like_results(obj):
+        out.append(obj)
+    if isinstance(obj, dict):
+        for value in obj.values():
+            _collect_candidates(value, out)
+    elif isinstance(obj, list):
+        for value in obj:
+            _collect_candidates(value, out)
+
+
+def _extract_items(text: str) -> List[Dict]:
+    """
+    从模型返回文本中提取结果列表。
+
+    模型被 response_format=json_object 约束，只能返回 JSON 对象，
+    因此常把数组包一层，且 key 不固定（content/results/data/...），
+    这里不再猜 key，而是扫描出所有形如结果列表的候选取最长的。
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    candidates: List[List[Dict]] = []
+
+    # 1) 逐个解码 JSON 文档，兼容多个文档拼接（如 {"type":...}\n{"content":[...]}）
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(text):
+        while idx < len(text) and text[idx] not in "{[":
+            idx += 1
+        if idx >= len(text):
+            break
+        try:
+            obj, end = decoder.raw_decode(text, idx)
+        except json.JSONDecodeError:
+            idx += 1
+            continue
+        _collect_candidates(obj, candidates)
+        idx = end
+
+    # 2) 兜底：正则扫描 [...] 片段
+    if not candidates:
+        for match in re.finditer(r'\[.*?\]', text, re.DOTALL):
+            try:
+                obj = json.loads(match.group())
+            except json.JSONDecodeError:
+                continue
+            _collect_candidates(obj, candidates)
+
+    if not candidates:
+        return []
+
+    return max(candidates, key=len)
 
 
 def _parse_response(text: str, batch_size: int) -> List[Dict]:
-    """解析大模型返回的JSON"""
-    text = text.strip()
-
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            data = data.get("data", data.get("results", [data]))
-        if isinstance(data, list):
-            return data
-    except json.JSONDecodeError:
-        pass
-
-    # 尝试提取 JSON 数组
-    match = re.search(r'\[.*?\]', text, re.DOTALL)
-    if match:
-        try:
-            data = json.loads(match.group())
-            if isinstance(data, list):
-                return data
-        except json.JSONDecodeError:
-            pass
-
-    return [{"id": i+1, "sentiment": "neutral", "confidence": 0.0} for i in range(batch_size)]
+    """解析大模型返回的JSON；解析不出结果时抛错，交由上层重试"""
+    items = _extract_items(text)
+    if not items:
+        preview = (text or "")[:120]
+        raise ValueError(f"无法从模型返回中解析出结果（{len(text or '')}字符）: {preview!r}")
+    return items
 
 
 def _map_sentiment(label: str, confidence: float) -> Dict:
@@ -132,7 +220,52 @@ def _map_sentiment(label: str, confidence: float) -> Dict:
     }
 
 
-def _process_batch(posts: List[Dict], batch_idx: int) -> List[Dict]:
+def _fallback_post(post: Dict, reason: str) -> Dict:
+    """LLM 失败时的兜底结果，打上标记以便事后识别（不再静默伪装成中性）"""
+    return {**post, **_map_sentiment("neutral", 0.0), "llm_failed": reason}
+
+
+def _success_post(post: Dict, sentiment_data: Dict) -> Dict:
+    """分析成功的结果；清掉上一轮遗留的失败标记，避免陈旧标记误导排查"""
+    clean = {k: v for k, v in post.items() if k != "llm_failed"}
+    return {**clean, **sentiment_data}
+
+
+def _match_results(posts: List[Dict], items: List[Dict], batch_idx: int) -> List[Dict]:
+    """把模型结果对应回帖子：优先按 id 匹配，缺失再退化到按位置"""
+    by_id = {}
+    for item in items:
+        if isinstance(item, dict) and item.get("id") is not None:
+            try:
+                by_id[int(item["id"])] = item
+            except (TypeError, ValueError):
+                pass
+
+    enriched = []
+    unmatched = 0
+    for i, post in enumerate(posts):
+        result = by_id.get(i + 1)
+        if result is None:
+            positional = items[i] if i < len(items) and isinstance(items[i], dict) else None
+            result = positional if positional is not None else {}
+            unmatched += 1
+
+        label = result.get("sentiment", result.get("label", "neutral"))
+        try:
+            confidence = float(result.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            confidence = 0.5
+
+        enriched.append(_success_post(post, _map_sentiment(label, confidence)))
+
+    # 结果条数对不上说明解析不完整，必须暴露出来
+    if unmatched:
+        print(f"  ⚠ 批次{batch_idx+1}: {unmatched}/{len(posts)}条未匹配到模型结果"
+              f"（返回{len(items)}条），已按中性兜底")
+    return enriched
+
+
+def _process_batch(posts: List[Dict], batch_idx: int, _depth: int = 0) -> List[Dict]:
     """处理一批帖子"""
     prompt = _build_prompt(posts)
     last_error = None
@@ -140,26 +273,27 @@ def _process_batch(posts: List[Dict], batch_idx: int) -> List[Dict]:
     for attempt in range(LLM_MAX_RETRIES):
         try:
             response_text = _call_deepseek(prompt)
-            results = _parse_response(response_text, len(posts))
-
-            enriched = []
-            for i, post in enumerate(posts):
-                result = results[i] if i < len(results) else {}
-                label = result.get("sentiment", "neutral")
-                confidence = float(result.get("confidence", 0.5))
-                sentiment_data = _map_sentiment(label, confidence)
-                enriched.append({**post, **sentiment_data})
-
-            return enriched
+            items = _parse_response(response_text, len(posts))
+            return _match_results(posts, items, batch_idx)
+        except (TruncatedResponse, EmptyResponse) as e:
+            last_error = e
+            # 截断是随机的：拆小批次比整批回退中性划算得多
+            if len(posts) > LLM_MIN_BATCH_SIZE and _depth < LLM_MAX_SPLIT_DEPTH:
+                mid = len(posts) // 2
+                print(f"  ⚠ 批次{batch_idx+1} {e}，拆分为 {mid}+{len(posts) - mid} 重试")
+                return (
+                    _process_batch(posts[:mid], batch_idx, _depth + 1)
+                    + _process_batch(posts[mid:], batch_idx, _depth + 1)
+                )
         except Exception as e:
             last_error = e
-            if attempt < LLM_MAX_RETRIES - 1:
-                time.sleep(2 ** attempt)
-                continue
+
+        if attempt < LLM_MAX_RETRIES - 1:
+            time.sleep(2 ** attempt)
 
     # 全部失败，回退到中性
-    print(f"  ⚠ 批次{batch_idx+1} LLM调用失败({last_error})，回退中性")
-    return [{**post, **_map_sentiment("neutral", 0.0)} for post in posts]
+    print(f"  ⚠ 批次{batch_idx+1} LLM调用失败({last_error})，{len(posts)}条回退中性")
+    return [_fallback_post(post, f"batch_failed: {last_error}") for post in posts]
 
 
 def analyze_posts_with_llm(posts: List[Dict]) -> List[Dict]:
@@ -210,9 +344,16 @@ def analyze_posts_with_llm(posts: List[Dict]) -> List[Dict]:
                 print(f"  ✗ 批次{batch_idx+1} 失败: {e}")
                 start_idx = batch_idx * LLM_BATCH_SIZE
                 for i, post in enumerate(batch):
-                    results[start_idx + i] = {**post, **_map_sentiment("neutral", 0.0)}
+                    results[start_idx + i] = _fallback_post(post, f"batch_error: {e}")
 
             time.sleep(LLM_REQUEST_DELAY)
+
+    # 汇总告警：全中性往往是"整批失败"而不是"市场真的没情绪"
+    failed = sum(1 for r in results if r and r.get("llm_failed"))
+    if failed:
+        ratio = failed / len(results) * 100
+        print(f"  ⚠ 本次分析 {failed}/{len(results)} 条（{ratio:.0f}%）LLM失败并回退中性，"
+              f"看多/看空计数不可信")
 
     return results
 

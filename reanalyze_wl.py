@@ -60,6 +60,19 @@ def reanalyze(date_str: str):
     return results
 
 
+def _refresh_overview_cycle(data: dict, source: str):
+    """
+    重算市场概览的周期阶段。
+
+    main.py 里 _recalculate_cycle_stages 只改了内存中的 overview，从未落盘，
+    所以读回磁盘的数据缺少 cycle_stage，对比报告会因此报错。
+    """
+    overview = data.get("overview")
+    if overview is not None:
+        from storage.data_store import load_history
+        overview["cycle_stage"] = determine_cycle_stage(overview, history=load_history(source))
+
+
 def rebuild_aggregated_data(date_str: str, reanalyzed_posts: dict):
     """根据重新分析的帖子重建聚合数据"""
     from collectors.guba_crawler import get_stock_rank
@@ -104,7 +117,9 @@ def rebuild_aggregated_data(date_str: str, reanalyzed_posts: dict):
                   f"多{metrics['positive_count']}/空{metrics['negative_count']}/中{metrics['neutral_count']}")
 
         guba_data["watchlist_metrics"] = wl_metrics
-        save_daily_data(guba_data, source="guba")
+        _refresh_overview_cycle(guba_data, "guba")
+        # 必须传 date_str：否则默认写"今天"，补跑历史日期时会落到错误的文件
+        save_daily_data(guba_data, date_str=date_str, source="guba")
 
     # 重建雪球自选股指标
     if "xueqiu_wl" in reanalyzed_posts and xq_data:
@@ -135,7 +150,8 @@ def rebuild_aggregated_data(date_str: str, reanalyzed_posts: dict):
                   f"多{metrics['positive_count']}/空{metrics['negative_count']}/中{metrics['neutral_count']}")
 
         xq_data["watchlist_metrics"] = wl_metrics
-        save_daily_data(xq_data, source="xueqiu")
+        _refresh_overview_cycle(xq_data, "xueqiu")
+        save_daily_data(xq_data, date_str=date_str, source="xueqiu")
 
     return guba_data, xq_data
 
