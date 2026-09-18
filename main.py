@@ -705,6 +705,9 @@ def generate_reports_only(date_str: str = None, skip_guba: bool = False, skip_xu
             guba_data["overview"]["heat_uv_index"] = market_heat.get("uv_index", 0)
             tag = " (临时)" if market_heat.get("is_provisional") else ""
             print(f"  📈 大盘热度: {heat_score:.1f}分 (UV={market_heat['uv_index']:.0f}万){tag}")
+        # 上面的热度/周期阶段只改了内存对象，必须落盘；
+        # 否则 JSON 里仍是旧值，其它读盘生成的报告会显示两个不同的热度
+        save_daily_data(guba_data, date_str=date_str, source="guba")
         save_history_snapshot(guba_data, source="guba")
         report_paths["guba"] = generate_report(guba_data, data_source="guba")
         print(f"  ✓ 股吧报告: {report_paths['guba']}")
@@ -715,6 +718,7 @@ def generate_reports_only(date_str: str = None, skip_guba: bool = False, skip_xu
         _ensure_watchlist(xq_data, "xueqiu")
         _recalculate_heat_scores(xq_data, "xueqiu")
         _recalculate_cycle_stages(xq_data, "xueqiu")
+        save_daily_data(xq_data, date_str=date_str, source="xueqiu")
         save_history_snapshot(xq_data, source="xueqiu")
         report_paths["xueqiu"] = generate_report(xq_data, data_source="xueqiu")
         print(f"  ✓ 雪球报告: {report_paths['xueqiu']}")

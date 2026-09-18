@@ -20,7 +20,6 @@ from config.settings import (
     MARKET_HEAT_APP_ID,
     MARKET_HEAT_UV_LOW,
     MARKET_HEAT_UV_HIGH,
-    MARKET_HEAT_LAG_DAYS,
 )
 
 

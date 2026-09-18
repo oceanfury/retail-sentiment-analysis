@@ -79,12 +79,10 @@ XUEQIU_HEAT_FOLLOW_BASE = 500000.0      # 关注量满分基准（50万关注量
 
 # ============== 市场热度（大盘UV指数）配置 ==============
 # apppc.com 东方财富网 APP ID
-MARKET_HEAT_APP_ID = "your_apppc_app_id"
+MARKET_HEAT_APP_ID = "3Eves1NRcX10yZ"
 # UV 指数归一化基准（万）：5000万=0分，10000万=100分
 MARKET_HEAT_UV_LOW = 5000.0
 MARKET_HEAT_UV_HIGH = 9000.0
-# 数据滞后天数（apppc 数据约滞后 6 天）
-MARKET_HEAT_LAG_DAYS = 7
 # 市场热度数据文件
 MARKET_HEAT_FILE = RAW_DATA_DIR / "market_heat.json"
 

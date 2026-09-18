@@ -564,11 +564,11 @@ neutral_count = total - bullish - bearish
 
 #### 数据来源
 
-- **接口**：`https://www.apppc.com/index.php?m=content&c=index&a=datashowJson&id=3Eves1NRcX10yZ`
+- **接口**：`https://www.apppc.com/index.php?m=content&c=index&a=getLastDatas&id=3Eves1NRcX10yZ&dataTypeName=90`
 
-- **字段**：UV指数（移动独立访客数，单位：万）
+- **字段**：UV指数（移动独立访客数，单位：万）位于 `ydata`，对应日期位于 `xdata`，两数组按下标一一对应
 
-- **历史**：支持传 `datatime=YYYY-MM-DD` 获取历史数据；`getLastDatas&type=90` 可拉取90天时序
+- **历史**：一次返回整段时序；`dataTypeName` 即天数，可选 1/7/30/90/180/360，默认取 90 天
 
 #### 归一化公式
 
@@ -1004,7 +1004,6 @@ trend < -0.05 → ↓
 | `MARKET_HEAT_APP_ID`    | `3Eves1NRcX10yZ` | 东方财富APP的apppc.com ID        |
 | `MARKET_HEAT_UV_LOW`    | 5000.0           | UV指数下限（=0分）                 |
 | `MARKET_HEAT_UV_HIGH`   | 9000.0           | UV指数上限（=100分）               |
-| `MARKET_HEAT_LAG_DAYS`  | 7                | 数据滞后天数（临时值填充窗口）             |
 
 ### 12.3 Deepseek LLM 配置
 
