@@ -222,7 +222,7 @@
                 <div class="heat-value-wrap">
                     <div class="value sentiment-mid">{{ "%.1f"|format(overview.overall_heat) }}</div>
                     {% if overview.heat_is_provisional %}
-                        <span class="provisional-badge" title="数据滞后约6天，为最近一周均值临时值">临</span>
+                        <span class="provisional-badge" title="数据源存在较长时间滞后，此值为最近一周均值临时值">临</span>
                     {% endif %}
                 </div>
                 <div class="sub">

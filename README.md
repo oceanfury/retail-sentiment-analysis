@@ -14,7 +14,7 @@
 
 - 🔥 **热度计算**：
 
-  - 股吧：个股热度 = 人气排名对数缩放；整体热度 = 东方财富APP UV指数归一化（数据来源 apppc.com，滞后约6天，临时值自动回填）
+  - 股吧：个股热度 = 人气排名对数缩放；整体热度 = 东方财富APP UV指数归一化（数据来源 apppc.com，存在较长时间滞后，临时值自动回填）
 
   - 雪球：互动量 70% + 关注量 30%（对数缩放，互动量基准2000，关注量基准500000）
 
@@ -253,7 +253,6 @@ python test_demo.py
 | XUEQIU\_REQUEST\_DELAY | 2.5 | 雪球请求间隔（秒）          |
 | MARKET\_HEAT\_UV\_LOW  | 5000.0 | UV指数下限（=0分）       |
 | MARKET\_HEAT\_UV\_HIGH | 9000.0 | UV指数上限（=100分）     |
-| MARKET\_HEAT\_LAG\_DAYS | 7     | 数据滞后天数（临时值填充）     |
 | DEEPSEEK\_API\_KEY | — | Deepseek API Key（自选股情绪分析用） |
 | DEEPSEEK\_MODEL | `deepseek-chat` | Deepseek 模型名 |
 | LLM\_BATCH\_SIZE | 20 | LLM 每批帖子数 |
