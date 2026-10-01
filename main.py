@@ -146,7 +146,7 @@ def _analyze_source(posts: List[Dict], hot_stocks: List[Dict],
     overview = calculate_market_overview(stock_metrics, posts, market_heat=market_heat)
 
     # 计算市场周期
-    market_cycle = determine_market_cycle(overview, [], stock_metrics)
+    market_cycle = determine_market_cycle(overview, stock_metrics)
 
     return {
         "overview": overview,
@@ -852,7 +852,7 @@ def backfill_guba_history_heat() -> Dict:
         day_fixed = bool(day) and _apply_market_heat(day, date_iso)
         if day_fixed:
             day["market_cycle"] = determine_market_cycle(
-                day["overview"], [], day.get("stock_metrics", []))
+                day["overview"], day.get("stock_metrics", []))
             day["overview"]["cycle_stage"] = day["market_cycle"]
             new_stage = day["market_cycle"].get("stage_name", new_stage)
 
@@ -970,7 +970,7 @@ def _recalc_market_cycle(data: Dict) -> None:
     # 负责这层键映射，市场级阶段必须走它。
     overview = data.get("overview", {})
     data["market_cycle"] = determine_market_cycle(
-        overview, [], data.get("stock_metrics", []))
+        overview, data.get("stock_metrics", []))
     overview["cycle_stage"] = data["market_cycle"]
 
 

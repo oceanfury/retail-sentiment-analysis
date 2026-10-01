@@ -186,7 +186,7 @@ def _calculate_trend(current: Dict, history: List[Dict], key: str) -> float:
     return (current.get(key, 0) - avg_history) / avg_history
 
 
-def determine_market_cycle(overview: Dict, theme_metrics: List[Dict],
+def determine_market_cycle(overview: Dict,
                            stock_metrics: List[Dict] = None) -> Dict:
     """整体市场状态描述"""
     if stock_metrics:
@@ -210,12 +210,5 @@ def determine_market_cycle(overview: Dict, theme_metrics: List[Dict],
 
     result = determine_cycle_stage(pseudo_metrics, history=None)
     result["is_market_wide"] = True
-
-    stage_distribution = {}
-    for tm in theme_metrics:
-        tc = determine_cycle_stage(tm, history=None)
-        name = tc["stage_name"]
-        stage_distribution[name] = stage_distribution.get(name, 0) + 1
-    result["theme_stage_distribution"] = stage_distribution
 
     return result

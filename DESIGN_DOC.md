@@ -800,7 +800,7 @@ confidence = clamp(0.1, 0.95)
 | 函数 | 入参 | 读取的键 | 用途 |
 | ---- | ---- | -------- | ---- |
 | `determine_cycle_stage(metrics, history)` | 个股指标 | `sentiment_index` / `heat_score` / `divergence` | 单只股票的情绪阶段 |
-| `determine_market_cycle(overview, theme_metrics, stock_metrics)` | 市场概览 | `overall_sentiment` / `overall_heat` + 多空家数 | 市场级阶段（报告顶部「市场状态」卡片） |
+| `determine_market_cycle(overview, stock_metrics)` | 市场概览 | `overall_sentiment` / `overall_heat` + 多空家数 | 市场级阶段（报告顶部「市场状态」卡片） |
 
 `determine_market_cycle` 内部做两件事，缺一不可：
 
@@ -814,7 +814,7 @@ confidence = clamp(0.1, 0.95)
 > 12 天雪球数据实测，修复前 12 天里有 6 天判错（应为分歧期 / 活跃期）。
 >
 > 判断依据：读 `overview` 的阶段必须经过 `determine_market_cycle`；
-> 直接调 `determine_cycle_stage` 的地方，入参一定是 `stock_metrics` / `theme_metrics` 里的个股或题材指标。
+> 直接调 `determine_cycle_stage` 的地方，入参一定是 `stock_metrics` 里的个股指标。
 
 ***
 
@@ -1209,7 +1209,6 @@ trend < -0.05 → ↓
 | --------------------- | ---------------------------- | -------------------- |
 | `SENTIMENT_DICT_PATH` | `config/sentiment_dict.json` | 情感词典路径               |
 | `REPORT_TEMPLATE`     | `"report.html"`              | 报告模板文件名              |
-| `THEMES`              | 14个题材映射                      | 题材关键词（当前未使用，主题分析已移除） |
 
 ***
 

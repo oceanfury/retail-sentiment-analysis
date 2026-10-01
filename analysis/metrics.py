@@ -2,12 +2,12 @@
 """
 情绪指标计算
 """
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from collections import defaultdict
 import sys
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent.parent))
 from config.settings import (
-    THEMES, GUBA_RANK_MAX,
+    GUBA_RANK_MAX,
     XUEQIU_HEAT_INTERACTION_WEIGHT, XUEQIU_HEAT_FOLLOW_WEIGHT,
     XUEQIU_HEAT_INTERACTION_BASE, XUEQIU_HEAT_FOLLOW_BASE,
 )
@@ -225,51 +225,6 @@ def _calculate_heat(posts: List[Dict], total_interactions: float,
         follow_score = 0
 
     return interaction_score + follow_score
-
-
-def calculate_theme_metrics(all_posts: List[Dict], weighted: bool = True) -> List[Dict]:
-    """
-    计算各题材的情绪指标
-
-    Args:
-        all_posts: 所有帖子
-        weighted: 是否使用互动量加权计算情绪分数
-
-    Returns:
-        list of dict: 各题材的情绪指标（按热度排序）
-    """
-    # 按题材分组
-    theme_posts = defaultdict(list)
-
-    for post in all_posts:
-        text = (post.get("title", "") or "") + (post.get("content", "") or "")
-        matched_themes = _match_themes(text)
-        for theme in matched_themes:
-            theme_posts[theme].append(post)
-
-    # 计算每个题材的指标
-    theme_metrics = []
-    for theme, posts in theme_posts.items():
-        metrics = calculate_stock_metrics(posts, f"theme:{theme}", theme, weighted=weighted)
-        metrics["theme"] = theme
-        metrics["post_count"] = len(posts)
-        theme_metrics.append(metrics)
-
-    # 按热度排序
-    theme_metrics.sort(key=lambda x: x["heat_score"], reverse=True)
-    return theme_metrics
-
-
-def _match_themes(text: str) -> List[str]:
-    """匹配帖子所属题材"""
-    matched = []
-    text_lower = text.lower()
-    for theme, keywords in THEMES.items():
-        for kw in keywords:
-            if kw.lower() in text_lower:
-                matched.append(theme)
-                break
-    return matched
 
 
 def calculate_market_overview(stock_metrics: List[Dict], all_posts: List[Dict],
