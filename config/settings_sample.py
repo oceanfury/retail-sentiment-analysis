@@ -40,10 +40,34 @@ XUEQIU_COOKIE = {
     "xq_a_token": "your_xq_a_token_here",
     "u": "your_u_token_here",
 }
-# 每只股票抓取数量
-XUEQIU_POST_COUNT = 50
-# 请求间隔（秒）
-XUEQIU_REQUEST_DELAY = 2.5
+# 每只股票目标帖子条数上限（翻页达到即可提前停止）
+XUEQIU_POST_COUNT = 30
+# 服务端单页硬上限，实测传更大的值也只返回 20 条，不要调大
+XUEQIU_PAGE_SIZE = 20
+# 自选股单只翻页上限
+XUEQIU_MAX_PAGES = 2
+# 热股单只翻页上限（热股帖子只喂市场级聚合指标，1 页够用）
+XUEQIU_HOT_MAX_PAGES = 1
+# 按日期补采历史数据时的翻页上限。历史日期要往后翻很多页才够得着，
+# 但上限不能盲目调高——雪球按 IP 限流，页数直接换算成等待时间。
+# 实际通常在翻到「整页都早于目标日」时就提前停止，用不到这个上限。
+XUEQIU_BACKFILL_MAX_PAGES = 6
+# 补采目标日距今超过这么多天就告警：股吧列表翻页有上限，太久远的日期可能翻不到
+MAX_BACKFILL_DAYS = 7
+
+# --- 限流控制 ---
+# 雪球按 IP 限流，实测约 4 次请求 / 30 秒，超限返回 400 或 JS 挑战页，
+# 封禁约 32 秒后自动恢复。下列参数按此标定，调快会触发封禁。
+XUEQIU_RATE_LIMIT_MAX_REQUESTS = 4      # 窗口内允许的请求数
+XUEQIU_RATE_LIMIT_WINDOW = 30.0         # 滑动窗口（秒）
+XUEQIU_MIN_REQUEST_INTERVAL = 8.0       # 最小请求间隔（30/4=7.5，留余量）
+XUEQIU_REQUEST_JITTER = 1.5             # 间隔随机抖动上限（秒）
+XUEQIU_RATE_LIMIT_RETRY_WAIT = 35.0     # 命中限流后重试等待（需 > 32 秒恢复窗）
+XUEQIU_MAX_RATE_LIMIT_RETRIES = 2       # 单页最大重试次数
+XUEQIU_RATE_LIMIT_SLOWDOWN = 1.5        # 命中后全局放慢倍数
+XUEQIU_MAX_REQUEST_INTERVAL = 20.0      # 放慢后的间隔上限（秒）
+XUEQIU_COLLECT_TIME_BUDGET = 1200.0     # 雪球采集阶段墙钟预算（秒），超时停止翻页
+XUEQIU_PAGE_RENDER_WAIT = 5.0           # 个股页导航后等待渲染（秒）
 
 # ============== 情绪分析配置 ==============
 # 情感词典路径
@@ -74,7 +98,10 @@ THEMES = {
 # 热度公式：互动量(70%) + 关注量(30%)，对数缩放
 XUEQIU_HEAT_INTERACTION_WEIGHT = 70.0   # 互动量权重
 XUEQIU_HEAT_FOLLOW_WEIGHT = 30.0        # 关注量权重
-XUEQIU_HEAT_INTERACTION_BASE = 2000.0   # 互动量满分基准（2000互动量=满分）
+# 互动量满分基准。原为 2000，按「每股约 10 条帖子」标定；
+# 2026-09 雪球采集改为翻页取全量后帖子数上升，同步上调以保持区分度
+# （否则热门股互动得分会普遍撞上 70 分上限）。新旧基准的热度不可直接比较。
+XUEQIU_HEAT_INTERACTION_BASE = 5000.0
 XUEQIU_HEAT_FOLLOW_BASE = 500000.0      # 关注量满分基准（50万关注量=满分）
 
 # ============== 市场热度（大盘UV指数）配置 ==============

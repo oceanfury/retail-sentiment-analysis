@@ -4,7 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% if data_source == 'xueqiu' %}雪球{% elif data_source == 'guba' %}股吧{% else %}散户{% endif %}情绪日报 - {{ date }}</title>
-    <script src="https://cdn.bootcdn.net/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+    <!-- ECharts 由报告生成器随报告一起复制到此目录（见 report_generator._copy_static_assets）。
+         不再走 CDN：bootcdn 曾长时间「只连不返回」，阻塞整个 head，导致所有图表空白。 -->
+    <script src="echarts.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -377,90 +379,14 @@
             </table>
         </div>
 
-        {% if watchlist_data %}
-        <!-- 自选股情绪分析 -->
-        <div class="section">
-            <div class="section-title">📌 自选股情绪分析</div>
-            <p style="font-size:13px;color:#888;margin-bottom:12px;">点击个股展开历史趋势图，再次点击折叠</p>
-            {% for w in watchlist_data %}
-            <div class="watchlist-item" style="border:1px solid #e8e8e8;border-radius:8px;margin-bottom:8px;overflow:hidden;">
-                <div class="watchlist-header" onclick="toggleWatchlist({{ loop.index }})"
-                     style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer;background:#fafafa;transition:background 0.2s;"
-                     onmouseover="this.style.background='#f0f5ff'"
-                     onmouseout="this.style.background='#fafafa'">
-                    <div style="display:flex;align-items:center;gap:16px;">
-                        <span style="font-size:18px;">{{ w.cycle_emoji }}</span>
-                        <div>
-                            <span style="font-weight:bold;font-size:15px;">{{ w.stock_name }}</span>
-                            <span style="color:#999;font-size:13px;margin-left:8px;">{{ w.stock_code }}</span>
-                        </div>
-                    </div>
-                    <div style="display:flex;gap:20px;align-items:center;">
-                        <div style="text-align:center;">
-                            <div style="font-size:11px;color:#999;">股价</div>
-                            <div style="font-weight:bold;">{{ "%.2f"|format(w.stock_price) if w.stock_price else "-" }}</div>
-                        </div>
-                        <div style="text-align:center;">
-                            <div style="font-size:11px;color:#999;">涨跌幅</div>
-                            <div style="font-weight:bold;color:{% if w.change_percent > 0 %}#f5222d{% elif w.change_percent < 0 %}#52c41a{% else %}#333{% endif %};">
-                                {{ ("+" ~ "%.2f"|format(w.change_percent) ~ "%") if w.change_percent > 0 else ("%.2f"|format(w.change_percent) ~ "%") if w.change_percent < 0 else "-" if not w.stock_price else "0.00%" }}
-                            </div>
-                        </div>
-                        <div style="text-align:center;">
-                            <div style="font-size:11px;color:#999;">情绪</div>
-                            <div style="font-weight:bold;color:{% if w.sentiment_index > 60 %}#f5222d{% elif w.sentiment_index < 40 %}#52c41a{% else %}#333{% endif %};">{{ "%.1f"|format(w.sentiment_index) }}</div>
-                        </div>
-                        <div style="text-align:center;">
-                            <div style="font-size:11px;color:#999;">热度</div>
-                            <div style="font-weight:bold;color:#fa8c16;">{{ "%.1f"|format(w.heat_score) }}</div>
-                        </div>
-                        <div style="text-align:center;">
-                            <div style="font-size:11px;color:#999;">分歧</div>
-                            <div style="font-weight:bold;color:#722ed1;">{{ "%.0f"|format(w.divergence * 100) }}%</div>
-                        </div>
-                        <div style="text-align:center;">
-                            <div style="font-size:11px;color:#999;">多/空/中</div>
-                            <div style="font-weight:bold;font-size:12px;">
-                                <span style="color:#f5222d;">{{ w.positive_count }}</span> /
-                                <span style="color:#52c41a;">{{ w.negative_count }}</span> /
-                                <span style="color:#888;">{{ w.neutral_count }}</span>
-                            </div>
-                        </div>
-                        <div style="text-align:center;">
-                            <div style="font-size:11px;color:#999;">阶段</div>
-                            <div style="font-weight:bold;font-size:13px;">{{ w.cycle_name }}</div>
-                        </div>
-                        <span class="toggle-icon" id="toggle-icon-{{ loop.index }}" style="color:#999;font-size:14px;">▶</span>
-                    </div>
-                </div>
-                <div class="watchlist-body" id="watchlist-body-{{ loop.index }}"
-                     style="display:none;padding:16px;border-top:1px solid #e8e8e8;">
-                    <p style="font-size:13px;color:#666;margin-bottom:12px;">{{ w.cycle_signal }}</p>
-                    <p style="margin-bottom:8px;">
-                        {% set pure_code = w.stock_code|replace('SH','')|replace('SZ','')|replace('BJ','') %}
-                        {% if data_source == 'guba' %}
-                        <a href="https://guba.eastmoney.com/list,{{ pure_code }}.html" target="_blank" style="font-size:13px;color:#1890ff;text-decoration:none;">📋 查看股吧讨论 →</a>
-                        {% elif data_source == 'xueqiu' %}
-                        {% if pure_code[:1] == '6' %}
-                        <a href="https://xueqiu.com/S/SH{{ pure_code }}" target="_blank" style="font-size:13px;color:#1890ff;text-decoration:none;">🌐 查看雪球讨论 →</a>
-                        {% else %}
-                        <a href="https://xueqiu.com/S/SZ{{ pure_code }}" target="_blank" style="font-size:13px;color:#1890ff;text-decoration:none;">🌐 查看雪球讨论 →</a>
-                        {% endif %}
-                        {% endif %}
-                    </p>
-                    <div id="watchlistChart-{{ loop.index }}" style="width:100%;height:300px;"></div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-        {% endif %}
 
         <!-- 数据说明 -->
         <div class="section">
             <div class="section-title">📋 数据说明</div>
             <div style="font-size: 13px; color: #666; line-height: 1.8;">
                 <p><strong>数据来源：</strong>{{ sources }}</p>
-                <p><strong>情绪分析方法：</strong>{% if data_source == 'xueqiu' %}雪球热门股采用词典规则法（否定词+程度词修饰），自选股采用 Deepseek 大模型分类（看多/看空/中性），互动量加权计算情绪指数{% elif data_source == 'guba' %}股吧热门股采用词典规则法（否定词+程度词修饰），自选股采用 Deepseek 大模型分类（看多/看空/中性），简单算术平均计算情绪指数{% else %}基于金融领域情感词典的规则法情绪分析，综合考虑否定词、程度词修饰{% endif %}</p>
+                <p><strong>情绪分析方法：</strong>{% if data_source == 'xueqiu' %}雪球热门股采用词典规则法（否定词+程度词修饰），互动量加权计算情绪指数{% elif data_source == 'guba' %}股吧热门股采用词典规则法（否定词+程度词修饰），简单算术平均计算情绪指数{% else %}基于金融领域情感词典的规则法情绪分析，综合考虑否定词、程度词修饰{% endif %}</p>
+                <p>本报告只覆盖全市场口径；自选股情绪分析见同日的「自选股情绪报告」。</p>
                 <p><strong>情绪指数：</strong>0-100，50为中性，越高越乐观{% if data_source == 'xueqiu' %}，互动量加权{% elif data_source == 'guba' %}，每帖一票不加权{% endif %}</p>
                 <p><strong>热度评分：</strong>0-100，{% if data_source == 'xueqiu' %}基于互动量(70%)+关注量(30%)对数加权{% elif data_source == 'guba' %}基于人气排名幂函数计算{% else %}综合帖子数量和互动量计算{% endif %}</p>
                 <p><strong>分歧度：</strong>0-100%，越高表示多空分歧越大</p>
@@ -477,8 +403,23 @@
     </div>
 
     <script>
+        // ECharts 缺失（报告被单独拷贝、没带上 echarts.min.js）时，图表区域给出明确提示，
+        var HAS_ECHARTS = (typeof echarts !== 'undefined');
+
+        var CHART_FALLBACK_HTML = '<div style="display:flex;align-items:center;justify-content:center;'
+            + 'height:100%;color:#999;font-size:13px;">图表库加载失败，请确认 echarts.min.js 与报告在同一目录</div>';
+
+        function chartFallback(id) {
+            var el = document.getElementById(id);
+            if (el) el.innerHTML = CHART_FALLBACK_HTML;
+        }
+
+        if (!HAS_ECHARTS) {
+            ['sentimentRankChart', 'sentimentDistChart', 'trendChart'].forEach(chartFallback);
+        }
+
         // 个股情绪排行图
-        var sentimentChart = echarts.init(document.getElementById('sentimentRankChart'));
+        var sentimentChart = HAS_ECHARTS ? echarts.init(document.getElementById('sentimentRankChart')) : null;
         var sentimentOption = {
             tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
             grid: { left: 100, right: 30, top: 10, bottom: 30 },
@@ -505,10 +446,10 @@
                 label: { show: true, position: 'right', formatter: '{c}', fontSize: 11 }
             }]
         };
-        sentimentChart.setOption(sentimentOption);
+        if (sentimentChart) sentimentChart.setOption(sentimentOption);
 
         // 情绪分布图
-        var distChart = echarts.init(document.getElementById('sentimentDistChart'));
+        var distChart = HAS_ECHARTS ? echarts.init(document.getElementById('sentimentDistChart')) : null;
         var distOption = {
             tooltip: { trigger: 'item', formatter: '{b}: {c}只 ({d}%)' },
             legend: { bottom: 10 },
@@ -522,20 +463,20 @@
                 label: { formatter: '{b}\n{c}只 ({d}%)' }
             }]
         };
-        distChart.setOption(distOption);
+        if (distChart) distChart.setOption(distOption);
 
         // 响应式
         window.addEventListener('resize', function() {
-            sentimentChart.resize();
-            distChart.resize();
-            var tc = document.getElementById('trendChart');
-            if (tc) trendChart.resize();
+            if (sentimentChart) sentimentChart.resize();
+            if (distChart) distChart.resize();
+            if (trendChart) trendChart.resize();
         });
 
         // 历史趋势图
+        var trendChart = null;
         var trendEl = document.getElementById('trendChart');
-        if (trendEl) {
-            var trendChart = echarts.init(trendEl);
+        if (HAS_ECHARTS && trendEl) {
+            trendChart = echarts.init(trendEl);
             var trendDates = {{ history_dates|tojson }};
             var trendSentiment = {{ history_sentiment|tojson }};
             var trendHeat = {{ history_heat|tojson }};
@@ -596,50 +537,6 @@
             trendChart.setOption(trendOption);
         }
 
-        // 自选股折叠交互
-        var watchlistData = {{ watchlist_data|tojson if watchlist_data else [] }};
-        var watchlistCharts = {};
-
-        function toggleWatchlist(idx) {
-            var body = document.getElementById('watchlist-body-' + idx);
-            var icon = document.getElementById('toggle-icon-' + idx);
-            if (body.style.display === 'none') {
-                body.style.display = 'block';
-                icon.textContent = '▼';
-                if (!watchlistCharts[idx]) {
-                    setTimeout(function() {
-                        var el = document.getElementById('watchlistChart-' + idx);
-                        if (el && watchlistData[idx - 1]) {
-                            var w = watchlistData[idx - 1];
-                            var chart = echarts.init(el);
-                            var opt = {
-                                tooltip: { trigger: 'axis' },
-                                legend: { data: ['情绪指数', '热度指数', '分歧度(%)'], top: 5 },
-                                grid: { left: 50, right: 30, top: 40, bottom: 30 },
-                                xAxis: { type: 'category', data: w.history_dates },
-                                yAxis: { type: 'value', min: 0, max: 100 },
-                                series: [
-                                    { name: '情绪指数', type: 'line', smooth: true, data: w.history_sentiment, itemStyle: { color: '#1890ff' }, areaStyle: { opacity: 0.1 } },
-                                    { name: '热度指数', type: 'line', smooth: true, data: w.history_heat, itemStyle: { color: '#fa8c16' } },
-                                    { name: '分歧度(%)', type: 'line', smooth: true, data: w.history_divergence, itemStyle: { color: '#722ed1' } }
-                                ]
-                            };
-                            chart.setOption(opt);
-                            watchlistCharts[idx] = chart;
-                        }
-                    }, 50);
-                } else {
-                    setTimeout(function() { watchlistCharts[idx].resize(); }, 50);
-                }
-            } else {
-                body.style.display = 'none';
-                icon.textContent = '▶';
-            }
-        }
-
-        window.addEventListener('resize', function() {
-            Object.values(watchlistCharts).forEach(function(c) { c.resize(); });
-        });
     </script>
 </body>
 </html>

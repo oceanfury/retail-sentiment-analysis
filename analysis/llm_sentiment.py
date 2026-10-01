@@ -358,22 +358,14 @@ def analyze_posts_with_llm(posts: List[Dict]) -> List[Dict]:
     return results
 
 
-def _build_analysis_prompt(comparison_data: List[Dict], guba_overview: Dict, xueqiu_overview: Dict) -> str:
-    """构建自选股对比分析的prompt"""
-    # 市场概览
-    g_sent = guba_overview.get("sentiment_index", 0)
-    g_heat = guba_overview.get("overall_heat", 0)
-    g_stage = guba_overview.get("cycle_stage", {}).get("stage_name", "")
-    g_bull = guba_overview.get("bullish_count", 0)
-    g_bear = guba_overview.get("bearish_count", 0)
+def _build_analysis_prompt(comparison_data: List[Dict]) -> str:
+    """
+    构建自选股分析的prompt
 
-    x_sent = xueqiu_overview.get("sentiment_index", 0)
-    x_heat = xueqiu_overview.get("overall_heat", 0)
-    x_stage = xueqiu_overview.get("cycle_stage", {}).get("stage_name", "")
-    x_bull = xueqiu_overview.get("bullish_count", 0)
-    x_bear = xueqiu_overview.get("bearish_count", 0)
-
-    # 自选股数据表
+    只管自选股口径，不带任何市场级信息：市场报告与自选股报告已经解耦，
+    补采历史日期时根本没有市场数据。此处若强行塞入空 overview，
+    模型会拿 calculate_market_overview([]) 的退化值（情绪50/热度0）当真数据编话术。
+    """
     lines = []
     for c in comparison_data:
         name = c["stock_name"]
@@ -388,53 +380,46 @@ def _build_analysis_prompt(comparison_data: List[Dict], guba_overview: Dict, xue
         x_st = c.get("xueqiu_stage", "")
         x_posts = f"{c['xueqiu_pos']}/{c['xueqiu_neg']}/{c['xueqiu_neu']}"
 
+        # 补采日拿不到实时人气排名，股吧热度是空的：给「—」而不是 0.0，
+        # 否则模型会把「没有这个数」读成「热度极低」
+        g_h_text = f"{g_h:.1f}" if c.get("guba_heat_available") else "—"
+
         lines.append(
             f"{name} {price:.2f} {chg:+.2f}% | "
-            f"股吧:情绪{g_s:.1f} 热度{g_h:.1f} {g_st} 多空{g_posts} | "
+            f"股吧:情绪{g_s:.1f} 热度{g_h_text} {g_st} 多空{g_posts} | "
             f"雪球:情绪{x_s:.1f} 热度{x_h:.1f} {x_st} 多空{x_posts}"
         )
 
     return f"""你是A股散户情绪分析专家。请根据以下双平台（股吧/雪球）数据，对每只自选股给出明日操作建议，并总结关键发现。
 
-情绪阈值：>70偏多，<30偏空，45-55中性。热度>75为高，<40为低。多/空/中为帖子数。
-
-== 市场概览 ==
-股吧: 情绪{g_sent:.1f} 热度{g_heat:.1f} {g_stage} 看多{g_bull}/看空{g_bear}
-雪球: 情绪{x_sent:.1f} 热度{x_heat:.1f} {x_stage} 看多{x_bull}/看空{x_bear}
+情绪阈值：>70偏多，<30偏空，45-55中性。热度>75为高，<40为低。多/空/中为帖子数。热度为「—」表示该平台当日无热度数据（补采历史日期），不要据此下结论。
 
 == 自选股数据 ==
 {chr(10).join(lines)}
 
-请返回JSON，包含三部分：
+请返回JSON，包含两部分：
 
-1. market_summary: 50字以内的市场整体总结
-2. suggestions: 每只股票一条，包含 stock_name, direction(偏多/偏空/谨慎/中性/回避), action(具体建议), reason(30字以内理由)
-3. insights: 2-4条关键发现，包含 title(10字以内), stocks(相关股票名列表), analysis(50字分析), signal(一句话建议), card_class(bullish/bearish/warning/空字符串)
+1. suggestions: 每只股票一条，包含 stock_name, direction(偏多/偏空/谨慎/中性/回避), action(具体建议), reason(30字以内理由)
+2. insights: 2-4条关键发现，包含 title(10字以内), stocks(相关股票名列表), analysis(50字分析), signal(一句话建议), card_class(bullish/bearish/warning/空字符串)
 
 只返回JSON，不要多余文字：
-{{"market_summary": "...", "suggestions": [...], "insights": [...]}}"""
+{{"suggestions": [...], "insights": [...]}}"""
 
 
-def generate_watchlist_analysis(
-    comparison_data: List[Dict],
-    guba_overview: Dict,
-    xueqiu_overview: Dict,
-) -> Dict:
+def generate_watchlist_analysis(comparison_data: List[Dict]) -> Dict:
     """
-    用Deepseek大模型生成自选股对比分析
+    用Deepseek大模型生成自选股分析
 
     Args:
-        comparison_data: 自选股对比数据列表
-        guba_overview: 股吧市场概览
-        xueqiu_overview: 雪球市场概览
+        comparison_data: 自选股双平台数据列表
 
     Returns:
-        dict: {market_summary, suggestions, insights}
+        dict: {suggestions, insights}
     """
     if not DEEPSEEK_API_KEY:
         raise ValueError("DEEPSEEK_API_KEY 未配置")
 
-    prompt = _build_analysis_prompt(comparison_data, guba_overview, xueqiu_overview)
+    prompt = _build_analysis_prompt(comparison_data)
 
     for attempt in range(LLM_MAX_RETRIES):
         try:

@@ -127,7 +127,8 @@ def _fetch_stock_quote(stock_code: str) -> tuple:
 
 
 def fetch_guba_posts(stock_code: str, stock_name: str = "",
-                     page_count: int = None) -> List[Dict]:
+                     page_count: int = None, target_date: str = None,
+                     fetch_rank: bool = True) -> List[Dict]:
     """
     抓取东方财富股吧帖子列表
 
@@ -135,6 +136,10 @@ def fetch_guba_posts(stock_code: str, stock_name: str = "",
         stock_code: 股票代码（纯数字，如 600519）
         stock_name: 股票名称
         page_count: 抓取页数，默认使用配置
+        target_date: 目标日期（YYYY-MM-DD）。默认 None 表示「今天」，
+            补采历史日期时由调用方传入，用于过滤与停止翻页判据
+        fetch_rank: 是否访问人气排名页。人气排名是实时接口、无法回溯，
+            按日期补采时必须置 False，否则会拿到「今天」的排名去标注历史数据
 
     Returns:
         list of dict: 帖子列表
@@ -147,9 +152,13 @@ def fetch_guba_posts(stock_code: str, stock_name: str = "",
     if page_count is None:
         page_count = GUBA_PAGE_COUNT
 
+    target_iso = target_date or datetime.now().strftime("%Y-%m-%d")
+    is_backfill = target_iso != datetime.now().strftime("%Y-%m-%d")
+
     all_posts = []
     stock_price = 0
     change_percent = 0
+    page = None
 
     try:
         page = _get_browser_and_page()
@@ -174,28 +183,40 @@ def fetch_guba_posts(stock_code: str, stock_name: str = "",
                 # 解析页面内容
                 posts = _parse_page_content(html_content, stock_code, stock_name)
 
-                # 过滤：只保留当天帖子
-                today_str = datetime.now().strftime("%Y-%m-%d")
+                # 过滤：只保留目标日期的帖子
                 today_posts = []
                 page_today_count = 0
+                page_all_earlier = True  # 本页是否全部早于目标日
                 for post in posts:
                     pt = post.get("publish_time", "")
                     if not pt:
-                        # 时间未知，保留
+                        # 时间未知，保留，但不足以判定「已跨过目标日」
                         today_posts.append(post)
-                    elif pt[:10] == today_str:
+                        page_all_earlier = False
+                    elif pt[:10] == target_iso:
                         today_posts.append(post)
                         page_today_count += 1
+                        page_all_earlier = False
+                    elif pt[:10] > target_iso:
+                        # 比目标日还新的帖子（补采时列表里混着今天的新帖）
+                        page_all_earlier = False
+                    # 其余（早于目标日）既不入列表，也不推翻 page_all_earlier
                 old_count = len(posts) - len(today_posts)
                 if old_count > 0:
-                    print(f"    (过滤 {old_count} 条非当日帖子)")
+                    print(f"    (过滤 {old_count} 条非目标日帖子)")
                 posts = today_posts
                 all_posts.extend(posts)
 
-                print(f"  第{p}页: 获取 {len(posts)} 条当日帖子")
+                print(f"  第{p}页: 获取 {len(posts)} 条 {target_iso} 帖子")
 
-                # 当页无当日帖子时停止翻页（第1页除外）
-                if page_today_count == 0 and p > 1:
+                if is_backfill:
+                    # 补采：列表按「最后回复」排序而非严格发表时间，单页没有目标日帖子
+                    # 并不能说明已经翻过去了；只有整页都早于目标日才停止。
+                    if p > 1 and page_all_earlier:
+                        print(f"  已翻过 {target_iso}，停止翻页")
+                        break
+                # 当日采集：当页无当日帖子时停止翻页（第1页除外）
+                elif page_today_count == 0 and p > 1:
                     print(f"  当日帖子采集完毕，停止翻页")
                     break
 
@@ -210,10 +231,15 @@ def fetch_guba_posts(stock_code: str, stock_name: str = "",
         import traceback
         traceback.print_exc()
 
-    # 采集完帖子后，访问排名页面获取真实人气排名
-    rank = _fetch_rank_for_stock(page, stock_code)
-    if rank:
-        print(f"  股吧人气排名: 第{rank}名")
+    # 采集完帖子后，访问排名页面获取真实人气排名。
+    # 人气排名页只有「此刻」的数值，补采历史日期时跳过——拿到今天的排名
+    # 去标注历史数据比没有数据更糟。
+    if fetch_rank and page is not None:
+        rank = _fetch_rank_for_stock(page, stock_code)
+        if rank:
+            print(f"  股吧人气排名: 第{rank}名")
+    elif not fetch_rank:
+        print(f"  补采模式：跳过实时人气排名")
 
     # 将股价写入每条帖子
     for p in all_posts:

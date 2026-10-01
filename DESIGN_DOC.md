@@ -27,7 +27,7 @@
 
 ### 1.1 目标
 
-采集东方财富股吧和雪球两大散户聚集平台的讨论数据，对热门股使用词典法、自选股使用 Deepseek 大模型进行情绪分析，计算个股情绪指数、热度评分和分歧度，最终生成可视化 HTML 日报和双平台对比报告，辅助判断散户情绪走向。
+采集东方财富股吧和雪球两大散户聚集平台的讨论数据，对热门股使用词典法、自选股使用 Deepseek 大模型进行情绪分析，计算个股情绪指数、热度评分和分歧度，最终生成可视化 HTML 日报，辅助判断散户情绪走向。
 
 ### 1.2 核心特点
 
@@ -41,7 +41,7 @@
 
 - **自选股监控**：独立配置关注股票，平台隔离计算，大模型分析情绪
 
-- **双平台对比报告**：自选股对比报告由 LLM 生成市场总结、操作建议和关键发现
+- **自选股情绪报告**：股吧/雪球市场报告 + 自选股报告，后者由 LLM 生成操作建议和关键发现
 
 - **历史趋势**：90天滚动存储，ECharts 趋势图展示
 
@@ -52,6 +52,7 @@
 ```
 Retail_sentiment/
 ├── main.py                     # 主入口，编排全流程
+├── migrate_split_watchlist.py  # 一次性迁移：拆分自选股与市场数据文件（幂等）
 ├── run_daily.ps1                # 定时运行脚本（交易日历判断 + 日志记录）
 ├── manage_schedule.ps1          # 计划任务管理（创建/删除/查看/测试）
 ├── config/
@@ -75,10 +76,12 @@ Retail_sentiment/
 ├── storage/
 │   └── data_store.py           # 数据读写（JSON/CSV/历史快照）
 ├── report/
-│   ├── report_generator.py     # 报告渲染（单平台 + 双平台对比）
+│   ├── report_generator.py     # 报告渲染（市场报告 + 自选股报告）
 │   └── templates/
-│       ├── report.html         # 单平台 Jinja2 HTML 模板
-│       └── watchlist_compare.html  # 自选股对比报告模板
+│       ├── report.html         # 市场整体报告模板（股吧/雪球共用）
+│       ├── watchlist_report.html   # 自选股报告模板（雪球段 + 股吧段）
+│       ├── echarts.min.js      # ECharts 5.4.3（随报告分发，不走 CDN）
+│       └── logo_hunshifan_v4.jpg   # 报告 Logo
 ├── browsers/                   # Playwright Chromium（平台相关）
 ├── logs/                        # 定时任务日志（schedule_YYYYMMDD.log）
 └── data/
@@ -103,60 +106,75 @@ Retail_sentiment/
 
 ### 3.1 全量运行流程（`python main.py`）
 
+自选股链路与市场链路**互相独立**：各采各的、各存各的、各出一份报告。
+编排顺序上自选股必须排在前面（原因见 Step 2 注）。
+
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Step 1: 获取热门股票                                │
-│  ├─ 股吧人气榜 → get_hot_stocks_from_gainers()       │
-│  └─ 雪球热股榜 → get_hot_stocks_from_xueqiu()        │
+│  阶段 A: 自选股链路  collect_watchlist_data()          │
+│  ├─ 读 config/watchlist.json（不读热股榜）             │
+│  ├─ Step 1: 股吧自选股 → fetch_guba_posts(target_date=)│
+│  ├─ Step 2: 雪球自选股 → fetch_xueqiu_posts(target_date=)│
+│  ├─ Step 3: analyze_posts_with_llm() → Deepseek 大模型 │
+│  ├─ Step 4: 增量合并（load_raw_posts_json, source=*_wl）│
+│  ├─ Step 5: calculate_stock_metrics() → 个股指标       │
+│  └─ Step 6: 落盘                                      │
+│      ├─ {source}_wl_data_{date}.json  ← 只含自选股      │
+│      ├─ {source}_wl_raw_posts_{date}.json             │
+│      └─ save_watchlist_history() → 趋势图数据源         │
 ├─────────────────────────────────────────────────────┤
-│  Step 2: 采集帖子                                    │
-│  ├─ 股吧热门股帖子 → fetch_guba_posts()              │
-│  ├─ 雪球热门股帖子 → fetch_xueqiu_posts()             │
-│  ├─ 股吧自选股帖子 → fetch_guba_posts()               │
-│  └─ 雪球自选股帖子 → fetch_xueqiu_posts()             │
-│  （增量合并：加载当天已有数据，按 post_id 去重追加）     │
+│  Stage A 报告: watchlist_report_{date}.html           │
+│  （LLM 生成操作建议/关键发现，规则引擎兜底）              │
 ├─────────────────────────────────────────────────────┤
-│  Step 3: 情绪分析                                    │
-│  ├─ 热门股: analyzer.analyze_post(post) → 词典法每帖打分 │
-│  │  返回 {sentiment, score[-1,1], confidence, ...}   │
-│  └─ 自选股: analyze_posts_with_llm() → Deepseek大模型 │
-│     批量并发调用，返回与词典法兼容的结构                          │
+│  阶段 B: 市场链路  collect_market_data()               │
+│  ├─ Step 1: 获取热门股票                              │
+│  │  ├─ 股吧人气榜 → get_hot_stocks_from_gainers()     │
+│  │  └─ 雪球热股榜 → get_hot_stocks_from_xueqiu()      │
+│  ├─ Step 2: 采集热门股帖子                            │
+│  │  （雪球自选股已在阶段 A 采完：其按 IP 限流，         │
+│  │    20 只热股足以耗尽配额，排队尾会成批丢数据）         │
+│  ├─ Step 3: 情绪分析（词典法，热门股用）                │
+│  ├─ Step 4: 采集市场热度（东方财富APP UV指数）          │
+│  ├─ Step 5: 指标计算（个股指标 / 市场概览 / 周期状态）    │
+│  └─ Step 6: 落盘                                      │
+│      ├─ {source}_data_{date}.json  ← 只含市场           │
+│      ├─ {source}_raw_posts_{date}.json / .csv          │
+│      └─ history.json（市场级历史快照）                  │
 ├─────────────────────────────────────────────────────┤
-│  Step 4: 采集市场热度                                │
-│  └─ fetch_market_heat() → 东方财富APP UV指数          │
-│     （股吧整体热度 = UV归一化，数据存在较长时间滞后，临时值自动回填） │
-├─────────────────────────────────────────────────────┤
-│  Step 5: 指标计算（按平台独立）                        │
-│  ├─ calculate_stock_metrics()  → 个股指标             │
-│  ├─ calculate_market_overview() → 市场概览            │
-│  └─ determine_cycle_stage()    → 周期状态             │
-├─────────────────────────────────────────────────────┤
-│  Step 6: 数据保存                                    │
-│  ├─ save_daily_data()     → 聚合 JSON                │
-│  ├─ save_raw_posts_json() → 原始帖子 JSON             │
-│  ├─ save_raw_posts_csv()  → 原始帖子 CSV              │
-│  └─ save_history_snapshot() → 历史快照                │
-├─────────────────────────────────────────────────────┤
-│  Step 7: 报告生成                                    │
-│  ├─ 股吧报告 → guba_report_{date}.html               │
-│  ├─ 雪球报告 → xueqiu_report_{date}.html              │
-│  └─ 自选股对比报告 → watchlist_compare_{date}.html      │
-│     （LLM 生成市场总结/操作建议/关键发现，规则引擎兜底）   │
+│  Stage B 报告: guba_report_{date}.html                │
+│                xueqiu_report_{date}.html              │
 └─────────────────────────────────────────────────────┘
 ```
 
+两条链路用不同的原始帖子文件与聚合文件，互不覆盖，因此可以单独跑、单独补采。
+`--watchlist-only` / `--market-only` 就是分别只走 A / B。
+
 ### 3.2 命令行参数
 
-| 参数               | 默认值   | 说明                              |
-| ---------------- | ----- | ------------------------------- |
-| `-n / --count`   | 20    | 监控股票数量                          |
-| `--guba-pages`   | 5     | 股吧每只股票抓取页数                      |
-| `--xueqiu-count` | 50    | 雪球每只股票抓取数量                      |
-| `--skip-guba`    | False | 跳过股吧采集                          |
-| `--skip-xueqiu`  | False | 跳过雪球采集                          |
-| `--collect-only` | False | 仅采集数据不生成报告                      |
-| `--report-only`  | False | 仅从已保存数据生成报告                     |
-| `--date`         | 当天    | 指定日期（YYYYMMDD），配合 --report-only |
+| 参数                 | 默认值   | 说明                                                    |
+| ------------------ | ----- | ----------------------------------------------------- |
+| `-n / --count`     | 20    | 监控股票数量（市场链路）                                          |
+| `--guba-pages`     | 5     | 股吧每只股票抓取页数                                            |
+| `--xueqiu-count`   | 30    | 雪球每只股票目标帖子数上限                                         |
+| `--skip-guba`      | False | 跳过股吧采集（两条链路都生效）                                       |
+| `--skip-xueqiu`    | False | 跳过雪球采集（两条链路都生效）                                       |
+| `--collect-only`   | False | 仅采集数据不生成报告                                            |
+| `--report-only`    | False | 仅从已保存数据生成报告                                           |
+| `--watchlist-only` | False | 只跑自选股链路（不采热股榜、不采大盘热度）                                 |
+| `--market-only`    | False | 只跑市场链路（不采自选股）                                         |
+| `--date`           | 当天    | 目标日期 YYYYMMDD。采集时=按该日期补采（只有自选股可回溯）；`--report-only` 时=读哪天的数据 |
+
+`--date` 与链路开关的交互：
+
+| 命令                                        | 行为                                       |
+| ----------------------------------------- | ---------------------------------------- |
+| `python main.py`                          | 市场 + 自选股（今天）                              |
+| `python main.py --date 20260930 --watchlist-only` | 补采 09-30 自选股                              |
+| `python main.py --date 20260930`          | 等价于 `--watchlist-only`，并提示「市场数据不可回溯，按自选股补采处理」 |
+| `python main.py --date 20260930 --market-only` | 报错退出（市场链路无法回溯）                            |
+| `python main.py --report-only --date X`   | 不改（从已有数据出全部报告）                            |
+
+`--date` 需为 8 位数字；目标日距今超过 `MAX_BACKFILL_DAYS`（默认 7）天时告警。
 
 **典型用法**：
 
@@ -173,9 +191,41 @@ python main.py --report-only
 # 重跑某天的报告
 python main.py --report-only --date 20260903
 
+# 只补自选股
+python main.py --date 20260930 --watchlist-only
+python main.py --report-only --date 20260930 --watchlist-only
+
 # 重新用LLM分析旧自选股帖子（修复旧词典法数据后重新生成报告）
 python reanalyze_wl.py 20260903
 ```
+
+### 3.3 按日期补采
+
+热股榜、股吧人气排名、大盘 UV 指数**都是实时接口**，错过了就补不回来；只有自选股能按日期回溯。
+补采由三道锁共同保证数据不会串日：
+
+1. **过滤**：爬虫只保留 `publish_time[:10] == target_date` 的帖子（股吧、雪球各一道）
+2. **停止翻页**：
+   - 当日采集——本页已无目标日帖子即停（列表按时间倒序，后面只会更旧）
+   - 补采——列表顶部混着目标日之后的新帖，单页没有目标日帖子说明不了什么，
+     必须等到**整页都早于目标日**才停
+3. **目标条数**：补采时按**目标日**的条数计数，否则新一天的帖子会先把配额占满
+
+补采日的字段可信度：
+
+| 字段                | 是否可信 | 说明                                            |
+| ----------------- | ---- | --------------------------------------------- |
+| 情绪指数 / 多空计数 / 分歧度 | ✅    | 来自帖子文本，与日期无关                                   |
+| 雪球热度              | ✅    | 公式只依赖互动量与关注量，都能从帖子/页面拿到                        |
+| 股吧热度              | ❌    | 来自实时人气排名页，历史日期不存在                              |
+| 股价 / 涨跌幅           | ⚠️   | 是**抓取那一刻**的行情，不是当日收盘价。补采日之后一直休市才恰好相等           |
+
+股吧热度必须**显式**标记为不可用（`heat_unavailable: True` 且 `heat_score = 0`）。
+`analysis/metrics.py` 里 `has_guba = guba_rank > 0`——排名为 0 时会**静默回落到雪球那套互动量公式**，
+产出一把换了刻度的假热度。报告里把这一列渲染成「—」，并在段首给出提示条。
+
+补采只写 `{source}_wl_data_{date}.json`，**不写 `history.json`**：那是市场级快照，
+补采没有热股数据，写进去就是假值污染趋势曲线。
 
 ***
 
@@ -256,11 +306,31 @@ python reanalyze_wl.py 20260903
 2. 注入雪球 Cookie（`xq_a_token` + `u`）
 3. 访问雪球首页获取额外 Cookie
 4. 逐只股票访问 `https://xueqiu.com/S/{SH/SZ+代码}`
-5. **API 响应拦截**：监听 `statuses/search` 和 `symbol/search` 的 JSON 响应
+5. **API 响应拦截**：监听 `statuses/search` 和 `symbol/search` 的 JSON 响应，作为限流时的兜底数据
 6. 从页面 DOM 提取关注量、股价、涨跌幅（DOM 选择器 + 脚本标签正则双重 fallback）
-7. 标准化拦截到的 API 数据为统一格式
-8. **媒体/公告过滤**：过滤新闻媒体账号和公司官方公告号
-9. **当日过滤**：只保留当天帖子（publish\_time 未知帖保留）
+7. **主动翻页**：在页面上下文内 `fetch` 讨论列表 API，按时间倒序翻页直至当日帖子采完
+8. 标准化帖子数据为统一格式（翻页结果与兜底数据按 post\_id 去重）
+9. **媒体/公告过滤**：过滤新闻媒体账号和公司官方公告号
+10. **当日过滤**：只保留当天帖子（publish\_time 未知帖保留）
+
+#### 采样顺序与限流控制
+
+雪球对同一 IP 的讨论列表接口限流，实测**约 4 次请求 / 30 秒**，超限返回 HTTP 400 或 WAF 挑战页，约 32 秒后自动恢复。限流按 IP 判定，重建浏览器上下文无法绕过。因此：
+
+| 机制      | 说明                                                     |
+| ------- | ------------------------------------------------------ |
+| 统一排队    | 所有请求（含页面导航自身发出的 XHR、热股榜接口）都经 `_wait_for_slot()` 节流 |
+| 自选股优先   | 自选股排在热股榜之前采集。20 只热股足以耗尽配额，排在队尾会成批丢数据                 |
+| 自适应放慢   | 一旦命中限流，全局请求间隔乘 `XUEQIU_RATE_LIMIT_SLOWDOWN`（上限封顶）    |
+| 有界重试    | 单页命中限流最多重试 `XUEQIU_MAX_RATE_LIMIT_RETRIES` 次，等待需大于 32 秒恢复窗 |
+| 时间预算    | `XUEQIU_COLLECT_TIME_BUDGET` 耗尽时**停止翻页而非跳过股票**，导航兜底数据仍在  |
+| 采集状态    | 每只股票记录 ok / partial / rate\_limited / error 等状态，落盘并在报告中标示 |
+
+> 讨论列表接口必须走 `www.xueqiu.com`：不带 `www` 的 `xueqiu.com` 会被阿里云 WAF 无条件拦截，返回 200 + 挑战页而非 JSON，与限流无关。
+
+#### 翻页停止条件
+
+列表按时间倒序返回，因此以「**本页已无当日帖子**」为主判据，配合目标条数上限与翻页次数上限。不使用「本页条数不足一页」判断结束——实测服务端会返回少于请求条数的页（如某股 page1 仅 19 条却横跨 40 天），该判据会提前截断当日数据。单页条数上限为 20，传更大的 `count` 也只返回 20 条。
 
 #### 媒体/公告过滤规则
 
@@ -436,17 +506,24 @@ python reanalyze_wl.py 20260903
 }
 ```
 
-#### 对比报告 LLM 生成
+#### 自选股报告 LLM 生成
 
-`generate_watchlist_analysis()` 函数调用 Deepseek 生成自选股对比报告的三部分内容：
+`generate_watchlist_analysis(comparison_data)` 调用 Deepseek 生成自选股报告的两部分内容：
 
-| 输出字段           | 说明                                       |
-| ---------------- | ---------------------------------------- |
-| `market_summary` | 50字以内市场整体总结                               |
-| `suggestions`    | 每只自选股一条：方向（偏多/偏空/谨慎/中性/回避）+ 建议 + 理由       |
-| `insights`       | 2-4条关键发现：标题 + 相关股票 + 分析 + 信号 + 卡片类型       |
+| 输出字段          | 说明                                       |
+| ------------- | ---------------------------------------- |
+| `suggestions` | 每只自选股一条：方向（偏多/偏空/谨慎/中性/回避）+ 建议 + 理由       |
+| `insights`    | 2-4条关键发现：标题 + 相关股票 + 分析 + 信号 + 卡片类型       |
 
-调用失败时回退到规则引擎（`generate_watchlist_compare_report` 内 if-else 规则匹配）。
+prompt 只喂自选股口径（`_build_comparison` 的输出），**不带任何市场级信息**：
+市场报告与自选股报告已经解耦，补采历史日期时根本没有市场数据。
+
+> **历史坑**：早期版本在 prompt 里塞了一段「市场概览」，读的是 `overview["sentiment_index"]`，
+> 但 `overview` 里只有 `overall_sentiment`，所以那两行一直是「情绪0.0 热度X」——本来就是废数据。
+> 更糟的是补采日会拿到 `calculate_market_overview([])` 的退化值（情绪50/热度0），
+> 模型会把这些当真数据编话术。已整块删除。
+
+调用失败时回退到规则引擎（`_rule_based_analysis` 内 if-else 规则匹配）。
 
 ***
 
@@ -510,7 +587,7 @@ follow_score = log10(follow_count) / log10(500000) × 30             # 满分30
 heat_score = interaction_score + follow_score
 ```
 
-- 互动量基准 2000，关注量基准 500000
+- 互动量基准 5000（2026-09 由 2000 上调，见下方说明），关注量基准 500000
 
 - 互动量权重70%，关注量权重30%，对数缩放
 
@@ -518,7 +595,9 @@ heat_score = interaction_score + follow_score
 
 > 权重 70/30：互动量代表当日讨论活跃度，关注量代表长期关注度。互动量权重更高，使热度能反映每日讨论变化。
 > 关注量基准 50万：避免关注量主导热度（旧基准10万时，3.8万关注即得91.7%分数）。
-> 移除了帖子数权重，因为雪球 API 每只股票返回约 10 条帖子，帖子数区分度不足。
+> 移除了帖子数权重，因为帖子数由采集上限决定，区分度不足。
+
+> **基准变更（2026-09）**：`XUEQIU_HEAT_INTERACTION_BASE` 由 2000 上调至 5000。原值按「每股约 10 条帖子」标定；采集改为翻页取全量后互动量总和上升，不上调基准会让热门股互动得分普遍撞上 70 分上限、个股热度排行失去区分度。调整前后的热度不可直接比较，历史趋势曲线会有一个台阶。
 
 ### 6.3 分歧度
 
@@ -592,7 +671,24 @@ apppc.com 数据存在**较长时间滞后**（滞后天数随数据源变动，
 | 有真实数据的日期 | 直接使用       | `is_provisional: false` |
 | 滞后期内的日期  | 用最近一周平均值填充 | `is_provisional: true`  |
 
-每次运行时拉取最新数据，新的真实值自动覆盖之前的临时值（回填机制）。
+##### 回填机制（两条链路，缺一不可）
+
+`market_heat.json` 和 `history.json` 是两份独立的文件，回填必须同时覆盖：
+
+1. **`market_heat.json`**：`save_market_heat()` 在合并时「真实值优先于临时值」，所以这份文件是自我修复的，每次运行都会把新公布的真实 UV 补进去。
+2. **`history.json`**：报告的历史趋势图读的是这份。它是每天写死的快照，**不会**因为 `market_heat.json` 更新而自动变化，必须显式回填。
+
+`main.py` 的 `backfill_guba_history_heat()` 负责第 2 条，在正常流程和 `--report-only` 下都会自动执行（幂等）：
+
+- 以 `market_heat.json` 为准，重算所有**已有真实 UV** 的日期，覆盖 `history.json` 里的热度
+- 同步修正当日存档 `guba_data_*.json` 的整体热度与周期阶段，保证 JSON / 历史快照 / 报告三者口径一致
+- UV 尚未公布的日期保持临时值，并标记 `heat_source: week_avg`、`heat_is_provisional: true`
+- 快照新增 `heat_source` / `heat_is_provisional` 两个字段，用于区分真实值与临时值
+- **仅在确有变化时落盘**：一致就跳过，运行两次的结果完全相同（幂等），也不会把历史存档的 `generated_at` 刷成当天
+
+> **历史坑**：2026-09-19 之前（提交 `514d61f` 修复 UV 接入之前）存下的数据，
+> `heat_source` 是 `internal` —— 也就是「个股热度均值」，和 UV 归一化完全是两把尺子。
+> 折线图上 09-10 ~ 09-17 那段 86 的台阶就是这么来的。回填会把它们一并改成真实 UV 口径。
 
 #### 报告展示
 
@@ -697,6 +793,29 @@ confidence = clamp(0.1, 0.95)
 
 > 情绪越极端、热度越高、趋势越明显、分歧越小 → 置信度越高。
 
+### 7.5 两个入口：个股 vs 市场
+
+模块里有两个函数，**键名口径不同，不能互换调用**：
+
+| 函数 | 入参 | 读取的键 | 用途 |
+| ---- | ---- | -------- | ---- |
+| `determine_cycle_stage(metrics, history)` | 个股指标 | `sentiment_index` / `heat_score` / `divergence` | 单只股票的情绪阶段 |
+| `determine_market_cycle(overview, theme_metrics, stock_metrics)` | 市场概览 | `overall_sentiment` / `overall_heat` + 多空家数 | 市场级阶段（报告顶部「市场状态」卡片） |
+
+`determine_market_cycle` 内部做两件事，缺一不可：
+
+1. **键名映射**：把 `overview` 的 `overall_sentiment` / `overall_heat` 翻译成 `sentiment_index` / `heat_score`，再调 `determine_cycle_stage`。
+2. **分歧度改由市场宽度算**：不用 `overview` 里的分歧度，而是按「情绪 >50 的股票家数占比」推 `market_divergence = 1 - |bullish_ratio - 0.5| × 2`（家数越一边倒，分歧越小）。
+
+> **历史坑**：`main.py` 的 `_recalculate_cycle_stages()` 曾把 `overview` 直接喂给
+> `determine_cycle_stage()`。因为键名对不上，三个维度全部落到默认值
+> （情绪 50 / 热度 0 / 分歧 0.5），**无论当天数据如何都判成「震荡期」** ——
+> 市场状态卡片恒定显示灰底震荡期。已改为走 `determine_market_cycle()`。
+> 12 天雪球数据实测，修复前 12 天里有 6 天判错（应为分歧期 / 活跃期）。
+>
+> 判断依据：读 `overview` 的阶段必须经过 `determine_market_cycle`；
+> 直接调 `determine_cycle_stage` 的地方，入参一定是 `stock_metrics` / `theme_metrics` 里的个股或题材指标。
+
 ***
 
 ## 8. 数据存储模块
@@ -705,19 +824,32 @@ confidence = clamp(0.1, 0.95)
 
 所有数据文件存于 `data/raw/`：
 
+拆分后市场级与自选股级各占一套文件，互不覆盖：
+
 | 文件名模式                             | 用途             | 写入时机   |
 | --------------------------------- | -------------- | ------ |
-| `guba_data_{date}.json`           | 股吧每日聚合数据       | Step 5 |
-| `xueqiu_data_{date}.json`         | 雪球每日聚合数据       | Step 5 |
-| `guba_posts_{date}.csv`           | 股吧原始帖子 CSV 导出  | Step 5 |
-| `xueqiu_posts_{date}.csv`         | 雪球原始帖子 CSV 导出  | Step 5 |
-| `guba_raw_posts_{date}.json`      | 股吧原始帖子（增量合并用）  | Step 2 |
-| `xueqiu_raw_posts_{date}.json`    | 雪球原始帖子（增量合并用）  | Step 2 |
-| `guba_wl_raw_posts_{date}.json`   | 股吧自选股原始帖子      | Step 2 |
-| `xueqiu_wl_raw_posts_{date}.json` | 雪球自选股原始帖子      | Step 2 |
-| `market_heat.json`                | 东方财富APP UV指数历史 | Step 4 |
-| `history.json`                    | 市场级历史快照（90天）   | Step 6 |
-| `watchlist_history.json`          | 自选股历史快照（90天）   | Step 6 |
+| `guba_data_{date}.json`           | 股吧**市场级**聚合数据   | 阶段 B Step 5 |
+| `xueqiu_data_{date}.json`         | 雪球**市场级**聚合数据   | 阶段 B Step 5 |
+| `guba_wl_data_{date}.json`        | 股吧**自选股**聚合数据   | 阶段 A Step 6 |
+| `xueqiu_wl_data_{date}.json`      | 雪球**自选股**聚合数据   | 阶段 A Step 6 |
+| `guba_posts_{date}.csv`           | 股吧原始帖子 CSV 导出  | 阶段 B Step 6 |
+| `xueqiu_posts_{date}.csv`         | 雪球原始帖子 CSV 导出  | 阶段 B Step 6 |
+| `guba_raw_posts_{date}.json`      | 股吧市场级原始帖子（增量合并用） | 阶段 B Step 6 |
+| `xueqiu_raw_posts_{date}.json`    | 雪球市场级原始帖子（增量合并用） | 阶段 B Step 6 |
+| `guba_wl_raw_posts_{date}.json`   | 股吧自选股原始帖子      | 阶段 A Step 6 |
+| `xueqiu_wl_raw_posts_{date}.json` | 雪球自选股原始帖子      | 阶段 A Step 6 |
+| `guba_collect_status_{date}.json` / `xueqiu_collect_status_{date}.json` | 市场链路采集状态 | 阶段 B Step 6 |
+| `xueqiu_wl_collect_status_{date}.json` | 自选股链路采集状态 | 阶段 A Step 6 |
+| `market_heat.json`                | 东方财富APP UV指数历史 | 阶段 B Step 4 |
+| `history.json`                    | 市场级历史快照（90天）   | 阶段 B Step 6 |
+| `watchlist_history.json`          | 自选股历史快照（90天）   | 阶段 A Step 6 |
+
+原始帖子文件本来就按范围拆分（`*_raw_posts_*` 无 `wl` 的是市场级），拆分前只有聚合数据是混着的。
+分割线落在 `_wl_` 上：文件名里有 `_wl_` 就是自选股口径。
+
+`load_watchlist_data(date, source)` 读取 `{source}_wl_data_{date}.json`；文件不存在时
+**回落到** `{source}_data_{date}.json` 的 `watchlist_metrics` 键，保证拆分前的历史日期也能出报告。
+一次性迁移脚本 `migrate_split_watchlist.py` 把旧混合文件正式拆开（幂等，可重复运行）。
 
 报告文件存于 `data/reports/`：
 
@@ -725,7 +857,7 @@ confidence = clamp(0.1, 0.95)
 | --------------------------- | ------ |
 | `guba_report_{date}.html`   | 股吧情绪日报 |
 | `xueqiu_report_{date}.html` | 雪球情绪日报 |
-| `watchlist_compare_{date}.html` | 自选股双平台对比报告 |
+| `watchlist_report_{date}.html` | 自选股情绪报告（雪球段 + 股吧段） |
 
 ### 8.2 聚合数据 JSON 结构
 
@@ -777,6 +909,19 @@ confidence = clamp(0.1, 0.95)
       "divergence": 0.3
     }
   },
+  "all_posts_count": 795,
+  "hot_stocks_count": 20
+}
+```
+
+> 市场文件里**不再有** `watchlist_metrics`：自选股走 `{source}_wl_data_{date}.json`。
+> 拆分前两者混在同一个文件里，两条链路互相覆盖。
+
+自选股聚合文件（`{source}_wl_data_{date}.json`）：
+
+```json
+{
+  "_meta": {"generated_at": "...", "date": "20260930", "version": "1.0"},
   "watchlist_metrics": [
     {
       "stock_code": "600031",
@@ -785,13 +930,21 @@ confidence = clamp(0.1, 0.95)
       "heat_score": 40.0,
       "divergence": 0.2,
       "total_posts": 3,
+      "positive_count": 2, "negative_count": 0, "neutral_count": 1,
       "stock_price": 20.10,
       "change_percent": 2.39,
-      "cycle_stage": {...}
+      "guba_posts": 3, "xueqiu_posts": 0,
+      "cycle_stage": {...},
+      "heat_unavailable": false,
+      "backfill": false
     }
-  ]
+  ],
+  "collect_status": {...},
+  "backfill": false
 }
 ```
+
+`heat_unavailable` / `backfill` 是补采日才会置位的标记（见 §3.3）。
 
 ### 8.3 CSV 结构
 
@@ -821,6 +974,7 @@ sentiment, score, confidence, url
 4. **加载自选股历史**：对每只自选股 `load_watchlist_history(code, days=30, source)`
 5. **渲染 HTML**：传入 15 个变量给 Jinja2 模板
 6. **输出文件**：`data/reports/{source}_report_{date}.html`
+7. **复制静态资源**：`_copy_static_assets()` 把 `echarts.min.js` 和 Logo 从 `report/templates/` 复制到报告同目录。报告用相对路径引用它们，因此必须与 HTML 同级才能离线打开。
 
 ### 9.2 报告内容模块
 
@@ -830,6 +984,12 @@ sentiment, score, confidence, url
 | 市场概览卡片  | 情绪指数、讨论热度、看多/看空/中性数、置信度        |
 | 周期状态卡片  | 当前阶段名称、emoji、信号描述、三维状态明细       |
 | 趋势图     | ECharts 三线图：情绪指数/热度指数/分歧度 × 日期 |
+
+> **图表库不走 CDN**：ECharts 由生成器随报告分发（`echarts.min.js` 与 HTML 同目录）。
+> 曾用 `cdn.bootcdn.net`，该域名会「TCP 连上但永不返回数据」，作为 `<head>` 里的同步脚本
+> 会一直阻塞解析；浏览器最终放弃后 `echarts` 未定义，`echarts.init` 抛错，
+> 三处图表（趋势图/饼图/自选股折线图）全部空白。模板里用 `HAS_ECHARTS` 兜底：
+> 库缺失时在图表区域显示提示文案，且不影响同一 `<script>` 块内的自选股折叠交互。
 | 热门个股情绪榜 | 全部 N 只股票，按情绪排序，含股价、涨跌幅、多/空/中帖子数、阶段标签  |
 | 自选股情绪分析 | 自选股列表 + 股价/涨跌幅/情绪/热度/多空分布/趋势图  |
 
@@ -844,41 +1004,50 @@ sentiment, score, confidence, url
 | 热度公式 | 人气排名对数                      | 互动量70%+关注量30%                      |
 | 帖子字段 | read\_count, comment\_count | 额外有 like\_count, stock\_followers |
 
-### 9.4 自选股对比报告（`generate_watchlist_compare_report`）
+### 9.4 自选股情绪报告（`generate_watchlist_report`）
 
-第三份报告，对自选股在股吧和雪球双平台的情绪数据进行横向对比。
+第三份报告，与市场报告完全解耦：**只依赖** `{source}_wl_data_{date}.json`，
+因此补采某一天的自选股时不需要（也拿不到）任何市场级数据。
 
 #### 生成流程
 
-1. 从股吧和雪球数据中提取各自选股指标
-2. 构建对比数据表（股价、涨跌幅、双平台情绪/热度/阶段/多空帖数、平台分歧度）
-3. **优先调用 LLM** 生成市场总结、操作建议、关键发现
-4. LLM 失败时**回退规则引擎**（if-else 规则判断方向、平台分歧、共振信号等）
-5. 渲染 `watchlist_compare.html` 模板
-6. 输出 `data/reports/watchlist_compare_{date}.html`
+1. 读双平台的自选股指标（`load_watchlist_data`）
+2. 各自构造模板数据 → `_build_watchlist_data(metrics, source)`（含 30 天历史序列，供折叠趋势图）
+3. 构建跨平台对齐表 `_build_comparison(guba_wl, xueqiu_wl)`（一行一只，**仅供 LLM prompt 与规则引擎使用**，不再渲染成表格）
+4. **优先调用 LLM**（`generate_watchlist_analysis`）生成操作建议、关键发现
+5. LLM 失败时**回退规则引擎**（`_rule_based_analysis`，按双平台共振/分歧的 if-else 规则）
+6. 渲染 `watchlist_report.html`，输出 `data/reports/watchlist_report_{date}.html`
 
 #### 报告内容模块
 
-| 模块      | 数据来源                            | 说明                          |
-| ------- | ------------------------------- | --------------------------- |
-| 市场概览对比  | 股吧 + 雪球 overview               | 双平台并排：情绪/热度/阶段/多空           |
-| 市场总结    | LLM 生成                          | 50字以内市场整体概括                 |
-| 自选股对比表  | 双平台 watchlist\_metrics          | 11只自选股，含平台分歧度高亮             |
-| 明日操作建议  | LLM 生成（回退规则）                    | 每只股票：方向标签 + 具体建议 + 理由       |
-| 关键发现    | LLM 生成（回退规则）                    | 2-4张分析卡片（bullish/bearish/warning） |
+| 模块        | 数据来源                     | 说明                                |
+| --------- | ------------------------ | --------------------------------- |
+| ① 雪球自选股情绪 | 雪球 `watchlist_metrics`   | 股价/涨跌幅/情绪/热度/分歧度/多空帖数/周期阶段，点击展开 30 天趋势图 |
+| ② 股吧自选股情绪 | 股吧 `watchlist_metrics`   | 同上，热度来自股吧人气排名                     |
+| ③ 明日操作建议  | LLM 生成（回退规则）            | 每只股票：方向标签 + 具体建议 + 理由              |
+| ④ 关键发现    | LLM 生成（回退规则）            | 2-4 张分析卡片（bullish/bearish/warning） |
+
+**不再包含**「市场概览对比」和「市场总结」：前者读的 `overview["sentiment_index"]` 本来就不存在
+（`overview` 里只有 `overall_sentiment`），一直渲染成「—」；后者需要市场数据，补采日必然拿不到。
+
+两段的 DOM id 都带平台前缀（`wl-chart-xueqiu-1` / `wl-chart-guba-1`），避免同页两张图 id 撞车。
+
+#### 补采日的渲染
+
+补采日股吧热度不可用（见 §3.3），报告把热度列渲染成「—」并在该段顶部显示提示条。
+`_build_watchlist_data` 会把 `heat_unavailable` 透传给模板，模板据此分支——
+不能用 `{{ '%.1f' % x if x else '—' }}` 判断，因为**真的 0 分热度也是 falsy**。
 
 #### 方向标签映射
 
-LLM 返回的方向标签通过 `_dir_map` 映射到 CSS 类：
+LLM 返回的方向标签通过 `_DIR_CLASS` 映射到 CSS 类：
 
-| 方向   | CSS 类           | 颜色  |
-| ---- | --------------- | --- |
-| 偏多/看多 | sig-bullish    | 绿色  |
-| 偏空/看空/回避 | sig-bearish    | 红色  |
-| 谨慎   | sig-warning    | 橙色  |
-| 中性/— | sig-neutral    | 灰色  |
-
-***
+| 方向         | CSS 类        | 颜色  |
+| ---------- | ------------ | --- |
+| 偏多/看多      | sig-bullish  | 绿色  |
+| 偏空/看空/回避   | sig-bearish  | 红色  |
+| 谨慎         | sig-warning  | 橙色  |
+| 中性/—       | sig-neutral  | 灰色  |
 
 ## 10. 自选股模块
 
@@ -908,7 +1077,7 @@ LLM 返回的方向标签通过 `_dir_map` 映射到 CSS 类：
 5. 历史数据按 `{stock_code}_{source}` 独立存储
 6. 报告中独立展示，含股价、涨跌幅、情绪、热度、多空分布、周期阶段
 7. 无帖子的自选股也会显示（情绪默认50，热度默认0，阶段为震荡期）
-8. 额外生成双平台对比报告（`watchlist_compare_{date}.html`）
+8. 自选股数据独立存于 `{source}_wl_data_{date}.json`，并单独生成 `watchlist_report_{date}.html`
 
 ### 10.3 平台隔离
 
@@ -931,8 +1100,10 @@ LLM 返回的方向标签通过 `_dir_map` 映射到 CSS 类：
 ```json
 {
   "guba": [
-    {"date": "20260901", "sentiment": 52.1, "heat": 70.0, "divergence": 0.3, "stage_name": "活跃期"},
-    {"date": "20260902", "sentiment": 53.5, "heat": 71.2, "divergence": 0.28, "stage_name": "活跃期"}
+    {"date": "20260901", "sentiment": 52.1, "heat": 70.0, "divergence": 0.3,
+     "stage_name": "活跃期", "heat_source": "apppc_daily", "heat_is_provisional": false},
+    {"date": "20260902", "sentiment": 53.5, "heat": 71.2, "divergence": 0.28,
+     "stage_name": "活跃期", "heat_source": "week_avg", "heat_is_provisional": true}
   ],
   "xueqiu": [...]
 }
@@ -943,6 +1114,8 @@ LLM 返回的方向标签通过 `_dir_map` 映射到 CSS 类：
 - 每平台最多保留 90 条（90天滚动窗口）
 
 - 报告中取最近 30 条渲染三线趋势图
+
+- `heat_source` / `heat_is_provisional` 记录该日热度的口径：UV 指数滞后，`week_avg` 表示当天只有「最近一周均值」的临时值，等真实 UV 公布后由 `backfill_guba_history_heat()` 回填（见 6.5）
 
 ### 11.2 自选股历史（`watchlist_history.json`）
 
@@ -999,8 +1172,21 @@ trend < -0.05 → ↓
 | `GUBA_REQUEST_DELAY`    | 1.5 秒            | 股吧请求间隔                      |
 | `GUBA_RANK_MAX`         | 5500             | 股吧人气排名总数基准                  |
 | `XUEQIU_COOKIE`         | —                | 雪球 Cookie（xq\_a\_token + u） |
-| `XUEQIU_POST_COUNT`     | 50               | 雪球每只股票抓取数量                  |
-| `XUEQIU_REQUEST_DELAY`  | 2.5 秒            | 雪球请求间隔                      |
+| `XUEQIU_POST_COUNT`     | 30               | 雪球每只股票目标帖子数上限（翻页达到即提前停止）    |
+| `XUEQIU_PAGE_SIZE`      | 20               | 服务端单页硬上限，传更大也只返回 20 条        |
+| `XUEQIU_MAX_PAGES`      | 2                | 自选股单只翻页上限                    |
+| `XUEQIU_HOT_MAX_PAGES`  | 1                | 热股单只翻页上限                     |
+| `XUEQIU_BACKFILL_MAX_PAGES` | 6            | 按日期补采时的翻页上限（翻过目标日会提前停止）      |
+| `MAX_BACKFILL_DAYS`     | 7                | 补采目标日距今超过此天数时告警              |
+| `XUEQIU_MIN_REQUEST_INTERVAL` | 8.0 秒     | 雪球最小请求间隔（限流约 4 次 / 30 秒）     |
+| `XUEQIU_RATE_LIMIT_MAX_REQUESTS` | 4       | 限流窗口内允许的请求数                  |
+| `XUEQIU_RATE_LIMIT_WINDOW` | 30.0 秒       | 限流滑动窗口                       |
+| `XUEQIU_RATE_LIMIT_RETRY_WAIT` | 35.0 秒  | 命中限流后的重试等待（需大于 32 秒恢复窗）     |
+| `XUEQIU_MAX_RATE_LIMIT_RETRIES` | 2       | 单页最大重试次数                     |
+| `XUEQIU_RATE_LIMIT_SLOWDOWN` | 1.5        | 命中限流后全局放慢倍数                  |
+| `XUEQIU_MAX_REQUEST_INTERVAL` | 20.0 秒   | 放慢后的间隔上限                     |
+| `XUEQIU_COLLECT_TIME_BUDGET` | 1200.0 秒   | 雪球采集阶段墙钟预算，耗尽则停止翻页           |
+| `XUEQIU_PAGE_RENDER_WAIT` | 5.0 秒          | 个股页导航后等待渲染                   |
 | `MARKET_HEAT_APP_ID`    | `3Eves1NRcX10yZ` | 东方财富APP的apppc.com ID        |
 | `MARKET_HEAT_UV_LOW`    | 5000.0           | UV指数下限（=0分）                 |
 | `MARKET_HEAT_UV_HIGH`   | 9000.0           | UV指数上限（=100分）               |
@@ -1049,7 +1235,7 @@ trend < -0.05 → ↓
 | comment\_count | × 2.0   | metrics.py  | 互动量权重  |
 | like\_count    | × 1.5   | metrics.py  | 互动量权重  |
 | 单帖权重上限         | 总权重 10% | metrics.py  | 防止单帖主导 |
-| 雪球互动量基准        | 2000    | metrics.py  | 热度满分基准 |
+| 雪球互动量基准        | 5000    | metrics.py  | 热度满分基准（2026-09 由 2000 上调） |
 | 雪球关注量基准        | 500000  | metrics.py  | 热度满分基准 |
 | 股吧排名基准         | 5500    | settings.py | 热度对数基准 |
 
@@ -1114,7 +1300,7 @@ trend < -0.05 → ↓
 | --- | --- | --- | --- |
 | 12:00 | RetailSentiment\_CollectMidday | `--collect-only` | 午盘采集帖子（增量合并） |
 | 15:30 | RetailSentiment\_CollectClose | `--collect-only` | 收盘采集帖子（增量合并） |
-| 16:00 | RetailSentiment\_Report | `--report-only` | 生成三份日报（股吧/雪球/对比） |
+| 16:00 | RetailSentiment\_Report | `--report-only` | 生成三份日报（股吧市场/雪球市场/自选股） |
 
 > 一天内两次 `--collect-only` 利用增量合并机制，采集到更多盘中和尾盘帖子。也可简化为单次全量运行 `python main.py`。
 

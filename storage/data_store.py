@@ -14,6 +14,23 @@ sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent.parent))
 from config.settings import RAW_DATA_DIR, MARKET_HEAT_FILE
 
 
+# 数据来源 → 文件名前缀。
+# 市场级与自选股级分属两套文件，互不覆盖：
+#   guba / xueqiu        → 市场整体（overview / stock_metrics / market_cycle）
+#   guba_wl / xueqiu_wl  → 自选股（watchlist_metrics）
+_SOURCE_PREFIX = {
+    "xueqiu": "xueqiu",
+    "guba": "guba",
+    "xueqiu_wl": "xueqiu_wl",
+    "guba_wl": "guba_wl",
+}
+
+
+def _daily_filename(source: str, date_str: str) -> str:
+    """每日聚合数据的文件名（source 未知时回退到综合口径）"""
+    return f"{_SOURCE_PREFIX.get(source, 'sentiment')}_data_{date_str}.json"
+
+
 def save_daily_data(data: Dict, date_str: str = None, source: str = None) -> str:
     """
     保存每日数据到 JSON 文件
@@ -21,7 +38,7 @@ def save_daily_data(data: Dict, date_str: str = None, source: str = None) -> str
     Args:
         data: 数据字典
         date_str: 日期字符串，默认今天
-        source: 数据来源（"xueqiu" / "guba" / None 综合）
+        source: 数据来源（"xueqiu" / "guba" / "xueqiu_wl" / "guba_wl" / None 综合）
 
     Returns:
         str: 保存的文件路径
@@ -29,13 +46,7 @@ def save_daily_data(data: Dict, date_str: str = None, source: str = None) -> str
     if date_str is None:
         date_str = datetime.now().strftime("%Y%m%d")
 
-    if source == "xueqiu":
-        filename = f"xueqiu_data_{date_str}.json"
-    elif source == "guba":
-        filename = f"guba_data_{date_str}.json"
-    else:
-        filename = f"sentiment_data_{date_str}.json"
-    filepath = RAW_DATA_DIR / filename
+    filepath = RAW_DATA_DIR / _daily_filename(source, date_str)
 
     # 补充元数据
     data["_meta"] = {
@@ -48,6 +59,44 @@ def save_daily_data(data: Dict, date_str: str = None, source: str = None) -> str
         json.dump(data, f, ensure_ascii=False, indent=2, default=str)
 
     print(f"  💾 数据已保存: {filepath}")
+    return str(filepath)
+
+
+def save_collect_status(records: Dict, date_str: str = None, source: str = "xueqiu") -> str:
+    """
+    保存雪球采集状态到独立文件
+
+    单独落一份而不是只塞进 xueqiu_data_*.json，是因为当天可能一条帖子都没采到，
+    那种情况下 save_daily_data 不会被执行，采集状态会完全丢失。
+
+    Args:
+        records: get_collect_records() 返回的 {stock_code: 记录} 字典
+        date_str: 日期字符串，默认今天
+        source: "xueqiu"（市场链路）/ "xueqiu_wl"（自选股链路）。
+            两条链路各写各的，补采自选股时不会覆盖当天的市场采集状态。
+
+    Returns:
+        str: 保存的文件路径（records 为空时返回空串）
+    """
+    if not records:
+        return ""
+
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y%m%d")
+
+    filepath = RAW_DATA_DIR / f"{source}_collect_status_{date_str}.json"
+    payload = {
+        "_meta": {
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "date": date_str,
+        },
+        "records": records,
+    }
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+
+    print(f"  💾 采集状态已保存: {filepath}")
     return str(filepath)
 
 
@@ -135,7 +184,7 @@ def load_daily_data(date_str: str = None, source: str = None) -> Dict:
 
     Args:
         date_str: 日期字符串，默认今天
-        source: 数据来源（"xueqiu" / "guba" / None 综合）
+        source: 数据来源（"xueqiu" / "guba" / "xueqiu_wl" / "guba_wl" / None 综合）
 
     Returns:
         dict: 数据字典
@@ -143,19 +192,51 @@ def load_daily_data(date_str: str = None, source: str = None) -> Dict:
     if date_str is None:
         date_str = datetime.now().strftime("%Y%m%d")
 
-    if source == "xueqiu":
-        filename = f"xueqiu_data_{date_str}.json"
-    elif source == "guba":
-        filename = f"guba_data_{date_str}.json"
-    else:
-        filename = f"sentiment_data_{date_str}.json"
-    filepath = RAW_DATA_DIR / filename
+    filepath = RAW_DATA_DIR / _daily_filename(source, date_str)
 
     if not filepath.exists():
         return {}
 
     with open(filepath, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+# 自选股数据在拆分前的旧布局：混在 {source}_data_{date}.json 的 watchlist_metrics 键里
+_LEGACY_WL_SOURCE = {"guba_wl": "guba", "xueqiu_wl": "xueqiu"}
+
+
+def load_watchlist_data(date_str: str = None, source: str = "guba_wl") -> Dict:
+    """
+    加载自选股每日数据
+
+    优先读拆分后的 {source}_wl_data_{date}.json；文件不存在时回落到旧布局
+    （{source}_data_{date}.json 里的 watchlist_metrics），这样历史日期不迁移也能出报告。
+
+    Args:
+        date_str: 日期字符串，默认今天
+        source: "guba_wl" / "xueqiu_wl"
+
+    Returns:
+        dict: {"watchlist_metrics": [...], "_meta": {...}}；无数据时 watchlist_metrics 为空表
+    """
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y%m%d")
+
+    filepath = RAW_DATA_DIR / _daily_filename(source, date_str)
+    if filepath.exists():
+        with open(filepath, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    legacy_source = _LEGACY_WL_SOURCE.get(source)
+    if legacy_source:
+        legacy = load_daily_data(date_str, source=legacy_source)
+        if legacy.get("watchlist_metrics"):
+            return {
+                "watchlist_metrics": legacy["watchlist_metrics"],
+                "_meta": legacy.get("_meta", {}),
+            }
+
+    return {"watchlist_metrics": [], "_meta": {"date": date_str}}
 
 
 def get_history_data(days: int = 7) -> List[Dict]:
@@ -232,6 +313,10 @@ def save_history_snapshot(data: Dict, source: str):
         "heat": overview.get("overall_heat", 0),
         "divergence": market_cycle.get("score_details", {}).get("divergence", 0),
         "stage_name": market_cycle.get("stage_name", ""),
+        # 热度口径：UV 指数滞后，当天可能只有「最近一周均值」的临时值，
+        # 记下来才能在回填时（以及报告里）区分真实值与临时值
+        "heat_source": overview.get("heat_source", "internal"),
+        "heat_is_provisional": overview.get("heat_is_provisional", False),
     }
 
     history = {}

@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>混市FAN自选股情绪报告 - {{ date }}</title>
+    <!-- ECharts 由报告生成器随报告一起复制到此目录（见 report_generator._copy_static_assets）。
+         不再走 CDN：bootcdn 曾长时间「只连不返回」，阻塞整个 head，导致所有图表空白。 -->
+    <script src="echarts.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: #f5f7fa;
+            color: #333;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        .header-logo {
+            width: 80px; height: 80px;
+            border-radius: 12px;
+            flex-shrink: 0;
+            object-fit: cover;
+            background: white;
+        }
+        .header-text { flex: 1; }
+        .header h1 { font-size: 28px; margin-bottom: 8px; }
+        .header .subtitle { opacity: 0.9; font-size: 14px; }
+        .header .meta { margin-top: 12px; font-size: 13px; opacity: 0.8; }
+
+        .section {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .section-title {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        /* 补采提示条 */
+        .backfill-note {
+            background: #fff7e6;
+            border-left: 4px solid #fa8c16;
+            border-radius: 6px;
+            padding: 10px 14px;
+            margin-bottom: 14px;
+            font-size: 13px;
+            color: #ad4e00;
+        }
+
+        /* 自选股条目 */
+        .watchlist-item {
+            border: 1px solid #e8e8e8;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            overflow: hidden;
+        }
+        .watchlist-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            cursor: pointer;
+            background: #fafafa;
+            transition: background 0.2s;
+        }
+        .watchlist-header:hover { background: #f0f5ff; }
+        .wl-cell { text-align: center; }
+        .wl-cell .label { font-size: 11px; color: #999; }
+        .wl-cell .value { font-weight: bold; }
+        .wl-name { font-weight: bold; font-size: 15px; }
+        .wl-code { color: #999; font-size: 13px; margin-left: 8px; }
+        .pos { color: #f5222d; }
+        .neg { color: #52c41a; }
+        .neu { color: #888; }
+
+        /* 信号标签 */
+        .signal-tag {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .sig-bullish { background: #f6ffed; color: #52c41a; }
+        .sig-bearish { background: #fff1f0; color: #f5222d; }
+        .sig-neutral { background: #fafafa; color: #8c8c8c; }
+        .sig-warning { background: #fff7e6; color: #fa8c16; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        th, td {
+            padding: 10px 8px;
+            text-align: center;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        th {
+            background: #fafafa;
+            font-weight: bold;
+            color: #666;
+            font-size: 12px;
+        }
+        td.stock-name { text-align: left; font-weight: bold; }
+
+        .analysis-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            border-left: 4px solid #1890ff;
+        }
+        .analysis-card.bearish { border-left-color: #52c41a; }
+        .analysis-card.bullish { border-left-color: #f5222d; }
+        .analysis-card.warning { border-left-color: #fa8c16; }
+        .analysis-card h4 { font-size: 16px; margin-bottom: 8px; }
+        .analysis-card .stock-tags { margin-bottom: 8px; }
+        .analysis-card p { font-size: 14px; color: #555; }
+        .analysis-card .signal { margin-top: 8px; font-size: 13px; color: #999; }
+
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #999;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <img class="header-logo" src="logo_hunshifan_v4.jpg" alt="logo">
+        <div class="header-text">
+            <h1>混市FAN自选股情绪报告</h1>
+            <div class="subtitle">自选股情绪分析（雪球 / 股吧），与全市场情绪报告分开生成</div>
+            <div class="meta">数据日期：{{ date }} | 生成时间：{{ generated_at }}</div>
+        </div>
+    </div>
+
+    {# 单只自选股条目：点击展开历史趋势图。platform 用于给两段的 DOM id 加前缀，避免撞车。 #}
+    {% macro watchlist_item(platform, w, idx) %}
+    <div class="watchlist-item">
+        <div class="watchlist-header" onclick="toggleWl('{{ platform }}', {{ idx }})">
+            <div style="display:flex;align-items:center;gap:16px;">
+                <span style="font-size:18px;">{{ w.cycle_emoji }}</span>
+                <div>
+                    <span class="wl-name">{{ w.stock_name }}</span>
+                    <span class="wl-code">{{ w.stock_code }}</span>
+                </div>
+            </div>
+            <div style="display:flex;gap:20px;align-items:center;">
+                <div class="wl-cell">
+                    <div class="label">股价</div>
+                    <div class="value">{{ "%.2f"|format(w.stock_price) if w.stock_price else "-" }}</div>
+                </div>
+                <div class="wl-cell">
+                    <div class="label">涨跌幅</div>
+                    <div class="value" style="color:{% if w.change_percent > 0 %}#f5222d{% elif w.change_percent < 0 %}#52c41a{% else %}#333{% endif %};">
+                        {{ ("+" ~ "%.2f"|format(w.change_percent) ~ "%") if w.change_percent > 0 else ("%.2f"|format(w.change_percent) ~ "%") if w.change_percent < 0 else "-" if not w.stock_price else "0.00%" }}
+                    </div>
+                </div>
+                <div class="wl-cell">
+                    <div class="label">情绪</div>
+                    <div class="value" style="color:{% if w.sentiment_index > 60 %}#f5222d{% elif w.sentiment_index < 40 %}#52c41a{% else %}#333{% endif %};">{{ "%.1f"|format(w.sentiment_index) }}</div>
+                </div>
+                <div class="wl-cell">
+                    <div class="label">热度</div>
+                    {# 补采日没有实时人气排名，热度是空的——给「—」而不是 0.0 #}
+                    <div class="value" style="color:#fa8c16;">{{ "—" if w.heat_unavailable else "%.1f"|format(w.heat_score) }}</div>
+                </div>
+                <div class="wl-cell">
+                    <div class="label">分歧</div>
+                    <div class="value" style="color:#722ed1;">{{ "%.0f"|format(w.divergence * 100) }}%</div>
+                </div>
+                <div class="wl-cell">
+                    <div class="label">多/空/中</div>
+                    <div class="value" style="font-size:12px;">
+                        <span class="pos">{{ w.positive_count }}</span> /
+                        <span class="neg">{{ w.negative_count }}</span> /
+                        <span class="neu">{{ w.neutral_count }}</span>
+                    </div>
+                </div>
+                <div class="wl-cell">
+                    <div class="label">阶段</div>
+                    <div class="value" style="font-size:13px;">{{ w.cycle_name }}</div>
+                    {% if w.collect_status and w.collect_status != 'ok' %}
+                    <div style="font-size:11px;color:#fa8c16;margin-top:2px;"
+                         title="该股票数据不完整，当日情绪指标仅供参考">{{ w.collect_status_text }}</div>
+                    {% endif %}
+                </div>
+                <span class="toggle-icon" id="wl-icon-{{ platform }}-{{ idx }}" style="color:#999;font-size:14px;">▶</span>
+            </div>
+        </div>
+        <div class="watchlist-body" id="wl-body-{{ platform }}-{{ idx }}"
+             style="display:none;padding:16px;border-top:1px solid #e8e8e8;">
+            <p style="font-size:13px;color:#666;margin-bottom:12px;">{{ w.cycle_signal }}</p>
+            <p style="margin-bottom:8px;">
+                {% set pure_code = w.stock_code|replace('SH','')|replace('SZ','')|replace('BJ','') %}
+                {% if platform == 'guba' %}
+                <a href="https://guba.eastmoney.com/list,{{ pure_code }}.html" target="_blank" style="font-size:13px;color:#1890ff;text-decoration:none;">📋 查看股吧讨论 →</a>
+                {% else %}
+                <a href="https://xueqiu.com/S/{{ 'SH' if pure_code[:1] == '6' else 'SZ' }}{{ pure_code }}" target="_blank" style="font-size:13px;color:#1890ff;text-decoration:none;">🌐 查看雪球讨论 →</a>
+                {% endif %}
+            </p>
+            <div id="wl-chart-{{ platform }}-{{ idx }}" style="width:100%;height:300px;"></div>
+        </div>
+    </div>
+    {% endmacro %}
+
+    {% macro watchlist_section(platform, title, items) %}
+    <div class="section">
+        <div class="section-title">{{ title }}</div>
+        {% set has_backfill = items | selectattr('heat_unavailable') | list | length > 0 %}
+        {% if has_backfill %}
+        <div class="backfill-note">
+            ⏳ 本段为按日期补采的数据：热度依赖实时人气排名，无法回溯，故显示「—」；情绪、分歧、多空计数不受影响。
+        </div>
+        {% endif %}
+        {% if items %}
+        <p style="font-size:13px;color:#888;margin-bottom:12px;">点击个股展开历史趋势图，再次点击折叠</p>
+        {% for w in items %}
+        {{ watchlist_item(platform, w, loop.index) }}
+        {% endfor %}
+        {% else %}
+        <p style="font-size:14px;color:#999;">当日无自选股数据。</p>
+        {% endif %}
+    </div>
+    {% endmacro %}
+
+    <!-- ① 雪球自选股 -->
+    {{ watchlist_section('xueqiu', '❄️ 雪球自选股情绪', xueqiu_watchlist) }}
+
+    <!-- ② 股吧自选股 -->
+    {{ watchlist_section('guba', '📊 股吧自选股情绪', guba_watchlist) }}
+
+    <!-- ③ 操作建议 -->
+    {% if suggestions %}
+    <div class="section">
+        <div class="section-title">🎯 明日操作建议</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>股票</th>
+                    <th>方向</th>
+                    <th>建议</th>
+                    <th>理由</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in suggestions %}
+                <tr>
+                    <td class="stock-name">{{ s.stock_name }}</td>
+                    <td><span class="signal-tag {{ s.signal_class }}">{{ s.direction }}</span></td>
+                    <td>{{ s.action }}</td>
+                    <td style="text-align:left; font-size:13px; color:#555;">{{ s.reason }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    <!-- ④ 关键发现 -->
+    {% if insights %}
+    <div class="section">
+        <div class="section-title">🔍 关键发现</div>
+        {% for insight in insights %}
+        <div class="analysis-card {{ insight.card_class }}">
+            <h4>{{ insight.title }}</h4>
+            <div class="stock-tags">
+                {% for stock in insight.stocks %}
+                <span class="signal-tag sig-neutral" style="margin-right:6px;">{{ stock }}</span>
+                {% endfor %}
+            </div>
+            <p>{{ insight.analysis }}</p>
+            <div class="signal">{{ insight.signal }}</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="footer">
+        <p>混市FAN散户情绪分析系统 | 本报告基于股吧和雪球双平台的自选股数据自动生成</p>
+        <p>情绪指数：>70偏多，&lt;30偏空，45-55中性 | 热度：排名/互动量归一化0-100 | 仅供参考，不构成投资建议</p>
+    </div>
+</div>
+
+<script>
+    // ECharts 缺失（报告被单独拷贝、没带上 echarts.min.js）时给出明确提示，
+    // 而不是留下一块空白让人以为数据是空的。
+    var HAS_ECHARTS = (typeof echarts !== 'undefined');
+    var WL_DATA = {
+        xueqiu: {{ xueqiu_watchlist|tojson }},
+        guba: {{ guba_watchlist|tojson }}
+    };
+    var wlCharts = {};
+
+    var CHART_FALLBACK_HTML = '<div style="display:flex;align-items:center;justify-content:center;'
+        + 'height:100%;color:#999;font-size:13px;">图表库加载失败，请确认 echarts.min.js 与报告在同一目录</div>';
+
+    function chartFallback(id) {
+        var el = document.getElementById(id);
+        if (el) el.innerHTML = CHART_FALLBACK_HTML;
+    }
+
+    if (!HAS_ECHARTS) {
+        document.querySelectorAll('[id^="wl-chart-"]').forEach(function(el) { chartFallback(el.id); });
+    }
+
+    // 展开/折叠单只自选股的历史趋势图。platform 区分雪球段与股吧段。
+    function toggleWl(platform, idx) {
+        var key = platform + '-' + idx;
+        var body = document.getElementById('wl-body-' + key);
+        var icon = document.getElementById('wl-icon-' + key);
+        if (body.style.display === 'none') {
+            body.style.display = 'block';
+            icon.textContent = '▼';
+            if (!HAS_ECHARTS) {
+                setTimeout(function() { chartFallback('wl-chart-' + key); }, 50);
+            } else if (!wlCharts[key]) {
+                setTimeout(function() {
+                    var el = document.getElementById('wl-chart-' + key);
+                    var w = WL_DATA[platform] && WL_DATA[platform][idx - 1];
+                    if (!el || !w) return;
+                    var chart = echarts.init(el);
+                    chart.setOption({
+                        tooltip: { trigger: 'axis' },
+                        legend: { data: ['情绪指数', '热度指数', '分歧度(%)'], top: 5 },
+                        grid: { left: 50, right: 30, top: 40, bottom: 30 },
+                        xAxis: { type: 'category', data: w.history_dates },
+                        yAxis: { type: 'value', min: 0, max: 100 },
+                        series: [
+                            { name: '情绪指数', type: 'line', smooth: true, data: w.history_sentiment, itemStyle: { color: '#1890ff' }, areaStyle: { opacity: 0.1 } },
+                            { name: '热度指数', type: 'line', smooth: true, data: w.history_heat, itemStyle: { color: '#fa8c16' } },
+                            { name: '分歧度(%)', type: 'line', smooth: true, data: w.history_divergence, itemStyle: { color: '#722ed1' } }
+                        ]
+                    });
+                    wlCharts[key] = chart;
+                }, 50);
+            } else {
+                setTimeout(function() { wlCharts[key].resize(); }, 50);
+            }
+        } else {
+            body.style.display = 'none';
+            icon.textContent = '▶';
+        }
+    }
+
+    window.addEventListener('resize', function() {
+        Object.keys(wlCharts).forEach(function(k) { wlCharts[k].resize(); });
+    });
+</script>
+</body>
+</html>
