@@ -14,11 +14,11 @@ ENV/
 # Playwright 浏览器（平台相关，体积大）
 browsers/
 
-# 数据文件（每日生成的报告和原始数据）
-data/raw/
-data/reports/
-# 保留 data 目录结构占位
-!data/.gitkeep
+# 数据文件（每日生成的报告和原始数据，目录由程序自动创建）
+data/
+
+# Claude Code 本地配置
+.claude/
 
 # IDE
 .vscode/
